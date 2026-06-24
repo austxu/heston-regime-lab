@@ -24,6 +24,8 @@ what makes the downstream HMM recover *economically meaningful* regimes (calm / 
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -110,6 +112,24 @@ CHAIN_COLUMNS = [
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Bounded pool so a slow yfinance/FRED call can be abandoned via a timeout instead of
+# hanging a request. The orphaned thread finishes in the background; we just stop waiting.
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hrl-fetch")
+
+
+def _request_timeout(config: dict) -> float:
+    return float(config.get("data", {}).get("request_timeout", 8.0))
+
+
+def _call_with_timeout(timeout: float, fn, *args, **kwargs):
+    """Run a blocking live fetch with a hard timeout; raise DataUnavailable if it elapses."""
+    future = _EXECUTOR.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeout as exc:
+        raise DataUnavailable(f"live fetch timed out after {timeout:.0f}s") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -409,7 +429,7 @@ def get_price_history(config: dict, prefer_live: bool = True) -> FetchResult:
     years = int(config["data"]["history_years"])
     if prefer_live:
         try:
-            df = fetch_price_history_live(ticker, years)
+            df = _call_with_timeout(_request_timeout(config), fetch_price_history_live, ticker, years)
             return FetchResult(df, "live", _now(), ticker)
         except DataUnavailable:
             pass
@@ -428,7 +448,7 @@ def get_vix_term_structure(
     years = int(config["data"]["history_years"])
     if prefer_live:
         try:
-            df = fetch_vix_term_structure_live(tickers, years)
+            df = _call_with_timeout(_request_timeout(config), fetch_vix_term_structure_live, tickers, years)
             return FetchResult(df, "live", _now(), "VIX")
         except DataUnavailable:
             pass
@@ -442,7 +462,10 @@ def get_risk_free_rate(config: dict, prefer_live: bool = True) -> float:
     if prefer_live:
         key = os.environ.get(config["data"].get("fred_api_key_env", "FRED_API_KEY"))
         try:
-            return fetch_fred_rate_live(config["data"]["fred_rate_series"], key)
+            return _call_with_timeout(
+                _request_timeout(config), fetch_fred_rate_live,
+                config["data"]["fred_rate_series"], key,
+            )
         except DataUnavailable:
             pass
     return float(config["market"]["risk_free_rate"])
@@ -466,12 +489,15 @@ def get_market_snapshot(
     today = _now()
 
     if prefer_live:
+        timeout = _request_timeout(config)
         try:
-            spot = float(fetch_price_history_live(
-                config["data"]["spx_ticker"], int(config["data"]["history_years"])
+            spot = float(_call_with_timeout(
+                timeout, fetch_price_history_live,
+                config["data"]["spx_ticker"], int(config["data"]["history_years"]),
             )["close"].iloc[-1])
-            chain = fetch_options_chain_live(
-                config["data"]["options_underlying"], spot, rate, div_yield, today
+            chain = _call_with_timeout(
+                timeout, fetch_options_chain_live,
+                config["data"]["options_underlying"], spot, rate, div_yield, today,
             )
             if chain.empty:
                 raise DataUnavailable("live chain empty")
