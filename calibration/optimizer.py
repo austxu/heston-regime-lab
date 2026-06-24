@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import yaml
@@ -40,6 +41,20 @@ from models.heston import HestonParams, heston_price
 
 # Canonical parameter order used everywhere in this module.
 PARAM_NAMES = ("kappa", "theta", "sigma", "rho", "v0")
+
+
+@dataclass
+class CalibrationProgress:
+    """One L-BFGS-B iteration snapshot, emitted to a calibration ``callback``.
+
+    Used by the WebSocket streamer to render a live convergence chart: the iteration
+    number, the current objective (sum of squared IV residuals) and the current
+    parameter estimates.
+    """
+
+    iteration: int
+    loss: float
+    params: dict  # {kappa, theta, sigma, rho, v0}
 
 
 def load_config(path: str | Path) -> dict:
@@ -171,6 +186,7 @@ def calibrate(
     data: MarketData,
     config: dict,
     initial_guess: HestonParams | None = None,
+    callback: Callable[[CalibrationProgress], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate Heston parameters to ``data`` by L-BFGS-B least squares on IV error.
 
@@ -184,6 +200,11 @@ def calibrate(
         and quadrature resolution.
     initial_guess : HestonParams, optional
         Overrides the initial guess from ``config``.
+    callback : callable, optional
+        Invoked once per accepted L-BFGS-B iteration with a
+        :class:`CalibrationProgress` (iteration, loss, params).  Used by the WebSocket
+        streamer to push live convergence updates.  When ``None`` the optimisation is
+        untouched.
 
     Returns
     -------
@@ -228,6 +249,18 @@ def calibrate(
             loss += feller_w * viol**2
         return loss
 
+    iter_counter = {"it": 0}
+
+    def _on_step(zk: np.ndarray) -> None:
+        # scipy passes the current normalised parameter vector each accepted iteration.
+        iter_counter["it"] += 1
+        p = HestonParams.from_array(_denormalise(np.asarray(zk), lo, hi))
+        callback(CalibrationProgress(
+            iteration=iter_counter["it"],
+            loss=objective(np.asarray(zk)),
+            params={name: getattr(p, name) for name in PARAM_NAMES},
+        ))
+
     result = minimize(
         objective,
         z0,
@@ -235,6 +268,7 @@ def calibrate(
         bounds=[(0.0, 1.0)] * len(PARAM_NAMES),
         options={"maxiter": int(cal.get("maxiter", 500)), "ftol": float(cal.get("tol", 1e-10)),
                  "gtol": 1e-12},
+        callback=_on_step if callback is not None else None,
     )
 
     params = HestonParams.from_array(_denormalise(result.x, lo, hi))
