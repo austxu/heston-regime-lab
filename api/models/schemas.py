@@ -139,8 +139,16 @@ class RegimeParametersResponse(BaseModel):
     alpha: float
     kruskal_wallis: dict[str, ParameterTest] = Field(description="Per-parameter H-test across regimes")
     regime_params: dict[str, HestonParamsModel] = Field(description="Calibrated params per regime label")
+    param_samples: dict[str, dict[str, list[float]]] = Field(
+        default_factory=dict,
+        description="Bootstrapped calibrated samples per regime label per parameter (for density plots)",
+    )
     static_mae_overall: float
     regime_mae_overall: float
+    static_mae_by_regime: dict[str, float] = Field(
+        default_factory=dict, description="Static-calibration mean abs IV error per regime label")
+    regime_mae_by_regime: dict[str, float] = Field(
+        default_factory=dict, description="Regime-conditional mean abs IV error per regime label")
     regime_conditional_improvement_pct: float
     provenance: Provenance
 

@@ -139,6 +139,8 @@ def get_regime_parameters(config: dict, cache: Cache, n_samples: int = 8) -> dic
 
     labels = list(config["hmm"]["state_labels"])
 
+    param_names = ("kappa", "theta", "sigma", "rho", "v0")
+
     def producer() -> dict:
         pbr = calibrated_params_by_regime(config, n_samples=n_samples, seed=0)
         kw = kruskal_wallis_across_regimes(pbr).as_dict()
@@ -153,8 +155,15 @@ def get_regime_parameters(config: dict, cache: Cache, n_samples: int = 8) -> dic
                 }
                 for r, p in sr.regime_params.items()
             },
+            # Raw bootstrap samples so the frontend can draw real per-regime densities.
+            "param_samples": {
+                labels[r]: {name: [getattr(p, name) for p in samples] for name in param_names}
+                for r, samples in pbr.items()
+            },
             "static_mae_overall": sr.static_mae_overall,
             "regime_mae_overall": sr.regime_mae_overall,
+            "static_mae_by_regime": {labels[r]: v for r, v in sr.static_mae_by_regime.items()},
+            "regime_mae_by_regime": {labels[r]: v for r, v in sr.regime_mae_by_regime.items()},
             "regime_conditional_improvement_pct": sr.improvement_pct,
             "_source": "synthetic",  # this analysis always runs on regime-typical surfaces
         }
@@ -166,8 +175,11 @@ def get_regime_parameters(config: dict, cache: Cache, n_samples: int = 8) -> dic
         "alpha": core["alpha"],
         "kruskal_wallis": core["kruskal_wallis"],
         "regime_params": core["regime_params"],
+        "param_samples": core.get("param_samples", {}),
         "static_mae_overall": core["static_mae_overall"],
         "regime_mae_overall": core["regime_mae_overall"],
+        "static_mae_by_regime": core.get("static_mae_by_regime", {}),
+        "regime_mae_by_regime": core.get("regime_mae_by_regime", {}),
         "regime_conditional_improvement_pct": core["regime_conditional_improvement_pct"],
         "provenance": {
             "source": core["_source"], "as_of": res.cached_at,
