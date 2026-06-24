@@ -1,45 +1,37 @@
-# TODO — Phase 2: Production FastAPI backend
+# TODO — Phase 3: React analytics dashboard
 
-Serve the Heston/HMM research as a live API. Phase 1 (math core) is done; the data
-layer, HMM, and residual correction the API depends on were still stubs, so this phase
-**also builds those missing backend pieces** (confirmed with the user), then layers a
-FastAPI + Redis + WebSocket + Docker service on top.
-
-Data strategy (confirmed): **live yfinance/FRED when reachable, deterministic synthetic
-fallback otherwise**, so the API runs end-to-end in an offline sandbox.
+A clean, dark, professional React+TS frontend consuming the Phase 2 API. Plotly charts,
+React Query data fetching, native WebSocket for live calibration.
 
 ## Plan (each step has a verify condition)
-- [ ] Deps installed (fastapi, redis, hmmlearn, xgboost, …); requirements + config updated
-      → verify: all import; `configs/base.yaml` has an `api:` section
-- [ ] `data/fetchers.py`: live SPX options/price/VIX + FRED rate; synthetic fallback; liquidity filter
-      → verify: returns a clean chain offline; filters illiquid rows; reports source/as_of
-- [ ] `data/features.py`: realized vol 5/21/63d, VIX level, VIX slope, return skew, volume ratio
-      → verify: feature frame has expected columns, no NaNs after warmup
-- [ ] `models/hmm.py`: GaussianHMM(3), vol-ordered state labels, posteriors
-      → verify: 3 states; labels ordered low/elevated/crisis by realized vol
-- [ ] `analysis/pricing_comparison.py`: XGBoost residual correction; Heston-vs-flat-BS errors
-      → verify: residual correction lowers mean|IV err|; falls back to sklearn if xgboost missing
-- [ ] `analysis/regime_analysis.py`: Kruskal-Wallis across regimes; regime-conditional calibration
-      → verify: returns per-parameter H/p; regime-conditional error <= static
-- [ ] `calibrate(..., callback=)` hook emitting (iter, loss, params) for streaming
-      → verify: callback fires each L-BFGS-B iteration; result unchanged when callback=None
-- [ ] `api/cache/redis_client.py`: redis + in-memory fallback, TTL, serve-stale-on-error, session keys
-      → verify: works with redis down (in-memory); stale served on producer error
-- [ ] `api/models/schemas.py`: Pydantic v2 response model per endpoint
-      → verify: every route returns a typed model; OpenAPI renders cleanly
-- [ ] `api/services/`: orchestration (calibration/surface/regime/comparison)
-      → verify: each callable independent of HTTP; cached results reused
-- [ ] `api/routes/` + `/health` + BackgroundTasks for long calibration
-      → verify: GET endpoints 200 offline; background calibration job schedulable
-- [ ] `api/websocket/calibration_stream.py` + `api/main.py` (CORS, lifespan, OpenAPI)
-      → verify: WS streams iteration/loss/params; reconnect-safe; app boots
-- [ ] `docker/Dockerfile.api` + `docker-compose.yml` (api + redis)
-      → verify: compose config valid; image builds conceptually
-- [ ] Tests + manual run of every endpoint
-      → verify: `pytest -q` green; live server answers /health + all routes
-- [ ] README Phase 2 section; focused commits
+- [ ] Surface per-regime bootstrap samples from the API for real density plots
+      → verify: GET /api/regime/parameters returns `param_samples`; tests still green
+- [ ] Scaffold Vite React-TS in frontend/, install deps (react-query, plotly, tailwind v3)
+      → verify: `npm run build` succeeds on the empty scaffold
+- [ ] Tailwind dark theme + base layout/nav (4 tabs)
+      → verify: app renders nav; tsc clean
+- [ ] api/client.ts + TS types mirroring schemas + React Query provider
+      → verify: typed client compiles; types match backend fields
+- [ ] hooks: useWebSocket (exp-backoff reconnect), useCalibration, useRegime*, useSurface, useComparison, useHealth
+      → verify: tsc clean; ws hook reconnects
+- [ ] shared: Skeleton, ErrorBoundary, StalenessIndicator, ProvenanceBadge, Card, Tooltip
+      → verify: components compile and are reused across views
+- [ ] VolSurface view: market vs model 3D surfaces + error heatmap; maturity/strike controls
+      → verify: builds; consumes /api/surface shape
+- [ ] CalibrationPanel: trigger button, live convergence (loss + param paths), param card, error badge
+      → verify: builds; WS messages typed; badge thresholds 3%/5%
+- [ ] RegimeDashboard: current badge + posterior bars, SPX history with regime bands, density plots, error-by-regime
+      → verify: builds; consumes current/history/parameters
+- [ ] ModelComparison: error table (BS/Heston/corrected), moneyness+maturity buckets, key-finding callout
+      → verify: builds; consumes /api/comparison
+- [ ] Skeletons + error boundaries + staleness indicator wired throughout
+      → verify: every data panel has loading + error fallback
+- [ ] docker/Dockerfile.frontend + docker-compose frontend service
+      → verify: compose config valid
+- [ ] tsc --noEmit + vite build green; dev server serves; commit in focused batches
+      → verify: `npm run build` exits 0; `tsc --noEmit` clean
 
 ## Done when
-Every spec'd endpoint (calibration/run, surface, regime/current, regime/history,
-comparison, /ws/calibration, /health) returns typed, cached, real computed data in
-offline mode, with live data flipping on when network is present.
+All four views build and consume the live API, dark-themed, with skeletons, error
+boundaries, staleness indicator, and a working WebSocket convergence chart; frontend
+dockerised and added to compose.

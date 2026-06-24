@@ -5,17 +5,16 @@ A stochastic-volatility research lab. Calibrate the Heston model to SPX options,
 market regimes with an HMM, and study how Heston parameters and calibration error vary
 across regimes — exposed as a live API.
 
-**Current status: Phase 2 — production FastAPI backend.** The Phase 1 math core
-(Heston/Gil-Pelaez pricing, BS, L-BFGS-B calibration) is validated on synthetic data.
-Phase 2 added the data layer, HMM regimes, residual correction, and a FastAPI + Redis +
-WebSocket service that serves all of it live, with a deterministic synthetic fallback so
-the whole stack runs offline.
+**Current status: Phase 3 — React analytics dashboard.** Phase 1 (math core) and Phase 2
+(FastAPI backend) are complete; Phase 3 added a React + TypeScript + Tailwind + Plotly +
+React Query frontend in `frontend/` that consumes the live API.
 
 Phases:
 - Phase 1 ✅ Math core (char. fn, Gil-Pelaez/Gauss-Legendre, BS+IV, calibration, round-trip).
 - Phase 2 ✅ Data layer, vol features, 3-state HMM, XGBoost residual correction,
   Kruskal-Wallis/regime-conditional analysis, FastAPI/Redis/WebSocket API, Docker.
-- Phase 3 (next): diagnostic plots / dashboard frontend.
+- Phase 3 ✅ React dashboard: Vol Surface, Live Calibration (WS), Regime Dashboard, Model
+  Comparison; skeletons, error boundaries, staleness indicator; dockerised behind nginx.
 - Phase 4: deeper regime study and recalibration.
 
 ## 2. Tech Stack
@@ -24,6 +23,8 @@ Phases:
   sklearn GradientBoosting fallback), scikit-learn.
 - Live data: yfinance (SPX/VIX), fredapi (risk-free); all with synthetic fallback.
 - API: FastAPI, uvicorn, pydantic v2, redis (in-memory fallback), websockets.
+- Frontend: React 19 + TypeScript (Vite), Tailwind v3, Plotly (`plotly.js-dist-min` via
+  react-plotly.js factory), @tanstack/react-query. Node 24 / npm 11.
 - pyyaml config, pytest. Virtualenv at `.venv` (`--system-site-packages`).
 
 ## 3. Architecture / Codebase Map
@@ -45,7 +46,12 @@ api/models/schemas.py     Pydantic v2 response models (incl. provenance, WS mess
 api/services/             pipeline + calibration/surface/comparison/regime orchestration
 api/routes/               calibration, surface, regime, comparison routers
 api/websocket/calibration_stream.py  threaded calibrate -> async queue -> WS frames
-docker/Dockerfile.api, docker-compose.yml   api + redis
+frontend/src/api/         typed client.ts + types.ts mirroring the Pydantic schemas
+frontend/src/hooks/       useWebSocket (backoff), useCalibration, useRegime, useApiQueries
+frontend/src/components/  VolSurface, CalibrationPanel, RegimeDashboard, ModelComparison, ui/
+frontend/src/lib/         theme, dataMode (live/synthetic context), kde, format, params
+docker/                   Dockerfile.api, Dockerfile.frontend (nginx), nginx.conf
+docker-compose.yml        frontend (:3000) + api (:8000) + redis (:6379)
 configs/base.yaml         all hyperparameters (market, quadrature, calibration, data,
                           hmm, residual_model, api)
 tests/test_synthetic.py   Phase 1 math-core suite
@@ -54,13 +60,17 @@ tests/test_phase2_api.py  Phase 2: data/HMM/cache/endpoints (offline, determinis
 Data flow (API): request -> route -> service (cache.get_or_compute) ->
 fetchers.get_market_snapshot (live|stale-cache|synthetic) -> filter liquid ->
 calibrate / fit HMM / compare -> Pydantic response with provenance.
+Data flow (frontend): React Query / WebSocket hook -> typed client (`/api`, `/ws` proxied
+to the backend) -> Plotly views; a global live/synthetic toggle keys every query.
 
 ## 4. Build / Run / Test
 - Activate env: `source .venv/bin/activate` (or use `.venv/bin/python`).
 - Tests: `.venv/bin/python -m pytest tests/ -q`
 - Round-trip demo: `.venv/bin/python -m calibration.validators`
 - API offline: `HRL_OFFLINE=1 .venv/bin/uvicorn api.main:app --reload` -> http://localhost:8000/docs
-- Full stack: `docker compose up --build` (api :8000, redis :6379)
+- Frontend dev: `cd frontend && npm install && npm run dev` -> http://localhost:5173
+  (proxies /api + /ws to :8000). Build/typecheck: `npm run build`.
+- Full stack: `docker compose up --build` (frontend :3000, api :8000, redis :6379)
 
 ## 5. Conventions & Gotchas
 - Char. function uses the **"little Heston trap"** g2 formulation — do NOT switch to g1.
@@ -81,3 +91,11 @@ calibrate / fit HMM / compare -> Pydantic response with provenance.
   calibration error is realistic (~0.1%) and residual correction has structure to fix.
 - Heavy compute runs in `run_in_threadpool`; the WS runs calibrate in a worker thread and
   bridges per-iteration progress to the event loop via a thread-safe queue.
+- **Frontend:** `verbatimModuleSyntax` is on — use `import type` for type-only imports.
+  Plotly is imported only via `src/components/Plot.tsx` (factory bound to dist-min); never
+  import `react-plotly.js` directly (its default expects the full `plotly.js`). The bundle
+  is large (~1.5 MB gzip) because Plotly is monolithic — acceptable for this tool.
+- `/api/regime/parameters` returns 202 while computing; the frontend surfaces that as
+  `AnalysisPendingError` and polls via React Query `refetchInterval` (rendered as "computing").
+- Three additive, non-breaking fields were added to `RegimeParametersResponse` for the
+  dashboard: `param_samples`, `static_mae_by_regime`, `regime_mae_by_regime`.

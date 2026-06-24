@@ -4,19 +4,21 @@ Stochastic-volatility research lab: calibrate the **Heston** model to SPX option
 market **regimes** with a hidden Markov model, and study how Heston parameters and
 calibration error change across regimes.
 
-> **Status: Phase 2 / 4 — production API.** The math core (Phase 1) is proven on synthetic
-> data; the data layer, HMM regimes, residual correction, and a FastAPI service are now
-> built and serve the research as a live, cached API.
+> **Status: Phase 3 / 4 — analytics dashboard.** The math core (Phase 1) and the FastAPI
+> backend (Phase 2) are complete; a React + TypeScript dashboard now visualises the live
+> API — vol surfaces, streaming calibration, regimes, and model comparison.
 
 ## Phases
 1. **Math core ✅:** Heston characteristic function, Gil-Pelaez Fourier inversion with
    Gauss-Legendre quadrature, Black-Scholes baseline + implied-vol inversion, L-BFGS-B
    calibration, synthetic round-trip validation (recover ground-truth params within 1%).
-2. **Backend + API ✅ (this phase):** yfinance/FRED data layer with a deterministic
-   synthetic fallback, vol features, 3-state Gaussian HMM regimes, XGBoost residual
-   correction, Kruskal-Wallis + regime-conditional calibration — all served by a
-   FastAPI + Redis + WebSocket backend.
-3. Diagnostic plots / dashboard frontend (Phase 3).
+2. **Backend + API ✅:** yfinance/FRED data layer with a deterministic synthetic fallback,
+   vol features, 3-state Gaussian HMM regimes, XGBoost residual correction, Kruskal-Wallis +
+   regime-conditional calibration — all served by a FastAPI + Redis + WebSocket backend.
+3. **Frontend dashboard ✅ (this phase):** React + TypeScript + Tailwind + Plotly + React
+   Query dashboard with four views (Vol Surface, Live Calibration, Regime Dashboard, Model
+   Comparison), a WebSocket convergence chart, skeletons, error boundaries, and a staleness
+   indicator.
 4. Deeper regime study and recalibration (Phase 4).
 
 ## Quickstart
@@ -30,8 +32,11 @@ python -m calibration.validators      # round-trip calibration demo
 # Run the API (offline / synthetic data, no network needed):
 HRL_OFFLINE=1 uvicorn api.main:app --reload   # then open http://localhost:8000/docs
 
-# Or the full stack with Redis:
-docker compose up --build                      # api on :8000, redis on :6379
+# Or the full stack (frontend + api + redis):
+docker compose up --build       # dashboard :3000, api :8000, redis :6379
+
+# Frontend dev server (proxies /api + /ws to the backend on :8000):
+cd frontend && npm install && npm run dev      # then open http://localhost:5173
 ```
 
 ## Layout
@@ -46,13 +51,15 @@ data/features.py            realized vol, VIX level/slope, return skew, volume r
 analysis/pricing_comparison.py  BS vs Heston vs XGBoost residual correction
 analysis/regime_analysis.py     Kruskal-Wallis + static-vs-regime-conditional calibration
 api/                        FastAPI app: routes, services, cache, websocket, schemas
-docker/Dockerfile.api, docker-compose.yml   api + redis stack
+frontend/                   React + TS + Tailwind + Plotly dashboard (Vite)
+docker/                     Dockerfile.api, Dockerfile.frontend, nginx.conf
+docker-compose.yml          frontend + api + redis stack
 configs/base.yaml           all hyperparameters
 tests/                      pytest suites (test_synthetic.py, test_phase2_api.py)
 ```
 
 The mathematical derivations (characteristic function, Gil-Pelaez inversion, HMM) are in
-[Mathematical background](#mathematical-background) below; the API is documented next.
+[Mathematical background](#mathematical-background) below; the API and dashboard follow.
 
 ## API (Phase 2)
 
@@ -77,6 +84,27 @@ deterministic synthetic data.
 
 Add `?live=false` to any endpoint (or set `HRL_OFFLINE=1`) to force the synthetic path.
 Interactive docs at `/docs`; set `FRED_API_KEY` to enable the live risk-free rate.
+
+## Dashboard (Phase 3)
+
+A React + TypeScript single-page app (`frontend/`) built with Vite, Tailwind (dark
+"quant terminal" theme), Plotly, and React Query. A global **Live / Synthetic** toggle drives
+every panel; each panel has skeleton loading, an error boundary, and a staleness indicator.
+
+- **Vol Surface** — market vs Heston 3D implied-vol surfaces side by side, a market−model
+  error heatmap, and moneyness/maturity range filters.
+- **Live Calibration** — runs a calibration over the `/ws/calibration` WebSocket and renders
+  the loss curve + per-parameter trajectories live, with a parameter card (κ θ σ ρ v₀,
+  tooltips) and a colour-coded mean-vol-error badge. The WebSocket hook reconnects with
+  exponential backoff.
+- **Regime Dashboard** — current-regime badge with posterior bars, 20y SPX history with
+  regime background bands, per-regime parameter density plots (Kruskal-Wallis), and a
+  static-vs-regime-conditional error chart.
+- **Model Comparison** — Black-Scholes vs Heston vs Heston+residual error table broken down
+  by moneyness and maturity buckets, with an auto-generated key-finding callout.
+
+In dev the Vite server proxies `/api` and `/ws` to the backend; in Docker, nginx does the
+same so the browser is always same-origin.
 
 ## Mathematical background
 
