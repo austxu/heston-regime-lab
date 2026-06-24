@@ -21,12 +21,18 @@ from api.models.schemas import (
     JobAcceptedResponse,
     JobStatusResponse,
 )
+from api.ratelimit import calibration_rate_limit
 from api.services.calibration_service import run_calibration
 
 router = APIRouter(prefix="/api/calibration", tags=["calibration"])
 
 
-@router.get("/run", response_model=CalibrationResponse, summary="Calibrate Heston to live SPX")
+@router.get(
+    "/run",
+    response_model=CalibrationResponse,
+    summary="Calibrate Heston to live SPX",
+    dependencies=[Depends(calibration_rate_limit)],
+)
 async def calibration_run(
     config: dict = Depends(get_config),
     cache: Cache = Depends(get_cache),
