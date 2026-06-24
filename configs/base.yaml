@@ -53,3 +53,77 @@ implied_vol:
   lower: 1.0e-4
   upper: 5.0
   xtol: 1.0e-10
+
+# ---------------------------------------------------------------------------
+# Phase 2: data layer, regime model, and API service.
+# ---------------------------------------------------------------------------
+
+# Live market-data fetchers (yfinance / FRED).  Anything here is best-effort:
+# on any network/parse failure the fetchers fall back to deterministic synthetic
+# data so the whole stack runs offline.
+data:
+  spx_ticker: "^GSPC"          # yfinance SPX index symbol for price history
+  options_underlying: "^SPX"   # symbol whose option chain we pull
+  vix_tickers:                 # VIX term structure: 9-day, 30-day, 3-month
+    vix9d: "^VIX9D"
+    vix: "^VIX"
+    vix3m: "^VIX3M"
+  history_years: 20            # daily SPX/VIX history depth for features + HMM
+  fred_rate_series: "DGS3MO"   # 3-month T-bill, used as the risk-free proxy
+  fred_api_key_env: "FRED_API_KEY"   # env var holding the FRED key (optional)
+  # Liquidity filtering of the raw options chain.
+  liquidity:
+    min_delta: 0.05            # drop deep-OTM: |delta| < this
+    min_open_interest: 1       # drop zero-OI quotes
+    max_rel_spread: 0.10       # drop (ask-bid)/mid > this
+    min_maturity_days: 5       # drop near-expiry noise
+  # Synthetic-fallback realism knobs (used only when live data is unavailable).
+  synthetic_fallback:
+    seed: 20240101
+    spot: 5000.0               # plausible SPX level
+    n_strikes: 15
+    n_maturities: 6
+    rel_spread: 0.02           # synthetic bid/ask half-spread as frac of mid
+    smile_perturb: 0.015       # non-Heston wing bump so offline calibration/residual are realistic
+
+# Hidden Markov regime model (hmmlearn GaussianHMM).
+hmm:
+  n_states: 3
+  covariance_type: "full"
+  n_iter: 200
+  random_state: 42
+  # Feature columns fed to the HMM (must exist in data/features output).
+  feature_cols: ["rv_21d", "vix", "vix_slope", "ret_skew_63d", "volume_ratio"]
+  state_labels: ["low_vol", "elevated_vol", "crisis"]   # assigned in vol order
+
+# XGBoost residual-correction model on Heston pricing errors.
+residual_model:
+  feature_cols: ["log_moneyness", "maturity", "market_iv"]
+  n_estimators: 200
+  max_depth: 3
+  learning_rate: 0.05
+  subsample: 0.9
+  random_state: 7
+
+# FastAPI service.
+api:
+  title: "heston-regime-lab API"
+  version: "0.2.0"
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins:                # frontend dev servers
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+    - "http://127.0.0.1:3000"
+    - "http://127.0.0.1:5173"
+  redis_url_env: "REDIS_URL"   # e.g. redis://localhost:6379/0; falls back to in-memory
+  cache:
+    calibration_ttl: 900       # seconds; calibration result freshness during a session
+    regime_ttl: 86400          # regime inference cached for a full day
+    surface_ttl: 900
+    comparison_ttl: 900
+  surface:                     # strike x maturity grid returned by /api/surface
+    n_strikes: 25
+    n_maturities: 8
+    moneyness_min: 0.80
+    moneyness_max: 1.20
