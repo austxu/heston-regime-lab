@@ -1,0 +1,34 @@
+# API image for heston-regime-lab.
+#
+# numpy/scipy/xgboost are compiled wheels; xgboost needs the OpenMP runtime
+# (libgomp1) present at runtime, so we install it explicitly on the slim base.
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# OpenMP runtime for xgboost; build tools only if a wheel is missing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies first for better layer caching.
+COPY requirements.txt ./
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Copy the project (models, calibration, data, analysis, api, configs).
+COPY . .
+
+EXPOSE 8000
+
+# Default to live data; override with HRL_OFFLINE=1 for synthetic-only.
+ENV REDIS_URL=redis://redis:6379/0
+
+# Container healthcheck hits the API's own health endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
