@@ -14,3 +14,14 @@ is removable and never needs explicit evaluation.
 short-dated options (slowest-decaying integrand) — both methods share a ~1e-8 truncation
 floor | Set such cross-quadrature tolerances at 1e-7, not 1e-8; tighter than that tests the
 truncation floor, not the implementation. Tighten only by raising U / n_nodes if needed.
+
+2026-06-24 | Regime calibrations ran ~40s each (1700+ feval) — the slow case was the
+LOW-vol regime, not crisis: deep-OTM / short-dated options are near-zero and non-invertible
+in low vol, returning nan that the objective penalises with a 10.0 cliff, which makes
+L-BFGS-B thrash | Always liquidity-filter (near-the-money, finite IV, min maturity) BEFORE
+calibrating, not just in the API path. The deep-OTM nan-penalty cliff, not the optimiser,
+is the cost.
+
+2026-06-24 | xgboost imported but failed to load its native lib (libxgboost.dylib ->
+libomp.dylib not found) on macOS | xgboost needs the OpenMP runtime: `brew install libomp`.
+Guard the import and fall back to sklearn GradientBoosting so the residual model still runs.
