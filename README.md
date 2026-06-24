@@ -4,37 +4,79 @@ Stochastic-volatility research lab: calibrate the **Heston** model to SPX option
 market **regimes** with a hidden Markov model, and study how Heston parameters and
 calibration error change across regimes.
 
-> **Status: Phase 1 / 4 — mathematical core.** Pricing and calibration proven on synthetic
-> data. Data, regime, and ML layers come in later phases.
+> **Status: Phase 2 / 4 — production API.** The math core (Phase 1) is proven on synthetic
+> data; the data layer, HMM regimes, residual correction, and a FastAPI service are now
+> built and serve the research as a live, cached API.
 
 ## Phases
-1. **Math core (this phase):** Heston characteristic function, Gil-Pelaez Fourier inversion
-   with Gauss-Legendre quadrature, Black-Scholes baseline + implied-vol inversion, L-BFGS-B
+1. **Math core ✅:** Heston characteristic function, Gil-Pelaez Fourier inversion with
+   Gauss-Legendre quadrature, Black-Scholes baseline + implied-vol inversion, L-BFGS-B
    calibration, synthetic round-trip validation (recover ground-truth params within 1%).
-2. Data layer (yfinance/FRED, IV computation, liquidity filtering, vol features).
-3. Real-data calibration validation, XGBoost residual correction, diagnostic plots.
-4. HMM regime detection, regime-conditional recalibration.
+2. **Backend + API ✅ (this phase):** yfinance/FRED data layer with a deterministic
+   synthetic fallback, vol features, 3-state Gaussian HMM regimes, XGBoost residual
+   correction, Kruskal-Wallis + regime-conditional calibration — all served by a
+   FastAPI + Redis + WebSocket backend.
+3. Diagnostic plots / dashboard frontend (Phase 3).
+4. Deeper regime study and recalibration (Phase 4).
 
 ## Quickstart
 ```bash
 python -m venv --system-site-packages .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pytest tests/ -q                      # full synthetic test suite
+# macOS: xgboost needs the OpenMP runtime ->  brew install libomp
+pytest tests/ -q                      # full test suite (math core + API, offline)
 python -m calibration.validators      # round-trip calibration demo
+
+# Run the API (offline / synthetic data, no network needed):
+HRL_OFFLINE=1 uvicorn api.main:app --reload   # then open http://localhost:8000/docs
+
+# Or the full stack with Redis:
+docker compose up --build                      # api on :8000, redis on :6379
 ```
 
 ## Layout
 ```
-models/heston.py          Heston char. function + Gil-Pelaez pricing (Gauss-Legendre)
-models/black_scholes.py   Black-Scholes pricing + implied-vol inversion (Brent)
-calibration/optimizer.py  L-BFGS-B nonlinear least-squares calibration
-calibration/validators.py synthetic data generation + round-trip validation
-configs/base.yaml         all hyperparameters
-tests/test_synthetic.py   pytest suite
+models/heston.py            Heston char. function + Gil-Pelaez pricing (Gauss-Legendre)
+models/black_scholes.py     Black-Scholes pricing + implied-vol inversion (Brent)
+models/hmm.py               Gaussian HMM (3 states) + vol-ordered regime labels
+calibration/optimizer.py    L-BFGS-B calibration (+ per-iteration streaming callback)
+calibration/validators.py   synthetic data generation + round-trip validation
+data/fetchers.py            yfinance/FRED fetchers + deterministic synthetic fallback
+data/features.py            realized vol, VIX level/slope, return skew, volume ratio
+analysis/pricing_comparison.py  BS vs Heston vs XGBoost residual correction
+analysis/regime_analysis.py     Kruskal-Wallis + static-vs-regime-conditional calibration
+api/                        FastAPI app: routes, services, cache, websocket, schemas
+docker/Dockerfile.api, docker-compose.yml   api + redis stack
+configs/base.yaml           all hyperparameters
+tests/                      pytest suites (test_synthetic.py, test_phase2_api.py)
 ```
 
 The mathematical derivations (characteristic function, Gil-Pelaez inversion, HMM) are in
-[Mathematical background](#mathematical-background) below.
+[Mathematical background](#mathematical-background) below; the API is documented next.
+
+## API (Phase 2)
+
+A FastAPI backend serves the research live. Every response carries a `provenance` block
+(`source: live|synthetic`, `as_of`, `stale`, `cache_backend`). Results are cached in Redis
+(falling back to an in-process cache) with per-session keys that roll over after market
+close, and a serve-stale-on-error policy: if a live yfinance/FRED pull fails, the last good
+value is returned flagged `stale`, and only if nothing is cached do we fall back to
+deterministic synthetic data.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness, cache backend, redis health |
+| GET | `/api/calibration/run` | Calibrate Heston to the live SPX surface (κ, θ, σ, ρ, v₀ + fit error) |
+| POST/GET | `/api/calibration/jobs[/{id}]` | Queue/poll a long calibration (`BackgroundTasks`) |
+| GET | `/api/surface` | Market & Heston IV grids (moneyness × maturity) for a 3D chart |
+| GET | `/api/regime/current` | Current regime + posteriors (cached HMM inference, sub-200ms) |
+| GET | `/api/regime/history` | Full regime path over SPX price (`?downsample=`) |
+| GET | `/api/regime/parameters` | Kruskal-Wallis across regimes + static-vs-regime accuracy (heavy → 202 + background) |
+| GET | `/api/comparison` | Flat-BS vs Heston vs Heston+residual error, by strike/maturity |
+| WS | `/ws/calibration` | Live L-BFGS-B convergence stream (`iteration`, `loss`, `params`) |
+
+Add `?live=false` to any endpoint (or set `HRL_OFFLINE=1`) to force the synthetic path.
+Interactive docs at `/docs`; set `FRED_API_KEY` to enable the live risk-free rate.
 
 ## Mathematical background
 
@@ -163,7 +205,7 @@ discourage Feller violations. Phase 1 proves the whole stack on synthetic data:
 generate IVs from known $p_{\text{true}}$, calibrate back, and require recovery within
 1% — achieved to $\sim$0.005% (`tests/test_synthetic.py`).
 
-### 7. HMM regime formulation (Phase 4 preview)
+### 7. HMM regime formulation
 
 A Gaussian hidden Markov model has discrete latent regimes $z_t\in\{1,\dots,K\}$
 ($K=3$) with transition matrix $A_{ij}=\mathbb{P}(z_{t+1}=j\mid z_t=i)$, initial
@@ -175,7 +217,10 @@ p(x_{1:T},z_{1:T})=\pi_{z_1}\prod_{t=2}^{T}A_{z_{t-1}z_t}\prod_{t=1}^{T}\mathcal
 $$
 
 Parameters are fit by Baum–Welch (EM); the most-likely regime path is decoded by
-Viterbi. Later phases test whether calibrated Heston parameters differ across the
-decoded regimes (Kruskal–Wallis, $p<0.01$) and recalibrate per regime. *Implemented in
-Phase 4 — included here for completeness of the mathematical narrative.*
+Viterbi and per-day posteriors $\mathbb{P}(z_t=k\mid x_{1:T})$ come from forward–backward.
+hmmlearn assigns states arbitrarily, so we relabel them by mean realized volatility
+(0 = calm, $K{-}1$ = crisis) for stable, interpretable labels. We then test whether
+calibrated Heston parameters differ across regimes (Kruskal–Wallis, $p<0.01$) and compare
+static vs regime-conditional calibration. Implemented in `models/hmm.py` and
+`analysis/regime_analysis.py`, served via `/api/regime/*`.
 
