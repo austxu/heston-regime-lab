@@ -1,7 +1,8 @@
-# Local stack: the FastAPI service + a Redis cache.
+# Local stack: React frontend + FastAPI service + Redis cache.
 #
 #   docker compose up --build
-#   open http://localhost:8000/docs
+#   open http://localhost:3000     (dashboard; nginx proxies /api + /ws to the api service)
+#   open http://localhost:8000/docs (API docs)
 #
 # Set FRED_API_KEY in the environment (or a .env file) to enable the live FRED rate;
 # without it the API uses the config risk-free constant. Set HRL_OFFLINE=1 to force the
@@ -31,4 +32,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
     restart: unless-stopped
