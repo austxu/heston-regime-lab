@@ -1,0 +1,15 @@
+# ---- Phase 1: mathematical core (required now) ----
+numpy>=1.24
+scipy>=1.10
+pyyaml>=6.0
+pytest>=7.0
+
+# ---- Phase 2+: data / ML / regimes (not used by the math core yet) ----
+pandas>=2.0
+yfinance>=0.2.40
+fredapi>=0.5
+xgboost>=2.0
+hmmlearn>=0.3
+matplotlib>=3.7
+seaborn>=0.13
+scikit-learn>=1.3

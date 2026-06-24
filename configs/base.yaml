@@ -1,0 +1,55 @@
+# Base configuration for heston-regime-lab.
+# All hyperparameters live here so nothing is hard-coded in the math modules.
+
+market:
+  # Risk-free rate and dividend yield are continuously-compounded, annualized.
+  risk_free_rate: 0.03      # r
+  dividend_yield: 0.0       # q
+  spot: 100.0               # S0 used for synthetic experiments
+
+# Numerical Fourier inversion (Gil-Pelaez + Gauss-Legendre).
+quadrature:
+  n_nodes: 128              # number of Gauss-Legendre nodes
+  upper_limit: 200.0        # truncation of the semi-infinite integral [0, U]
+
+# Heston "ground-truth" parameters used to generate synthetic option data.
+# (kappa: mean-reversion speed, theta: long-run variance, sigma: vol-of-vol,
+#  rho: spot/vol correlation, v0: initial variance)
+synthetic:
+  params:
+    kappa: 2.0
+    theta: 0.04
+    sigma: 0.5
+    rho: -0.7
+    v0: 0.04
+  # Synthetic option grid (used by validators).
+  strikes_pct_of_spot: [0.80, 0.90, 0.95, 1.00, 1.05, 1.10, 1.20]
+  maturities_years: [0.25, 0.50, 1.00, 2.00]
+  noise_iv: 0.0             # std of Gaussian noise added to synthetic IVs (0 = clean)
+
+# Nonlinear least-squares calibration (scipy L-BFGS-B).
+calibration:
+  objective: implied_vol    # "implied_vol" (relative IV error) or "price"
+  # Parameter bounds: (kappa, theta, sigma, rho, v0)
+  bounds:
+    kappa: [0.1, 15.0]
+    theta: [0.001, 1.0]
+    sigma: [0.01, 2.0]
+    rho:   [-0.999, 0.999]
+    v0:    [0.001, 1.0]
+  # Initial guess for calibration (deliberately offset from ground truth).
+  initial_guess:
+    kappa: 1.0
+    theta: 0.06
+    sigma: 0.3
+    rho: -0.4
+    v0: 0.05
+  feller_penalty: 0.0       # weight on max(0, sigma^2 - 2*kappa*theta) soft penalty
+  maxiter: 500
+  tol: 1.0e-10
+
+# Implied-vol inversion (Black-Scholes via Brent's method).
+implied_vol:
+  lower: 1.0e-4
+  upper: 5.0
+  xtol: 1.0e-10
