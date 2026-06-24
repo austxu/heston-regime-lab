@@ -4,7 +4,8 @@ Responsibilities:
 * load config and build the shared cache (Redis or in-memory) on startup (lifespan),
 * register the calibration / surface / regime / comparison routers and the calibration
   WebSocket,
-* configure CORS for local frontend development,
+* production hardening: gzip compression, env-driven CORS, structured JSON request logging,
+  and optional Sentry error tracking,
 * expose a health check and clean, tagged OpenAPI docs.
 
 Run locally:  ``uvicorn api.main:app --reload``
@@ -14,20 +15,58 @@ Offline mode (no network): set ``HRL_OFFLINE=1`` so every endpoint uses syntheti
 from __future__ import annotations
 
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from api.cache.redis_client import build_cache
+from api.logging_config import configure_logging, get_logger
 from api.models.schemas import HealthResponse
 from api.routes import calibration, comparison, regime, surface
 from api.websocket.calibration_stream import stream_calibration
 from calibration.optimizer import load_config
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "base.yaml"
+
+log = get_logger("hrl.api")
+
+
+def _init_sentry(version: str) -> bool:
+    """Initialise Sentry if SENTRY_DSN is set and the SDK is installed; else no-op."""
+    dsn = os.environ.get("SENTRY_DSN")
+    if not dsn:
+        return False
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=dsn,
+            release=f"heston-regime-lab@{version}",
+            environment=os.environ.get("ENVIRONMENT", "production"),
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        )
+        return True
+    except Exception:  # noqa: BLE001 — error tracking must never break startup
+        return False
+
+
+def _cors_origins(api_cfg: dict) -> list[str]:
+    """Production CORS origins from the env var if set, else the config defaults.
+
+    Set ``CORS_ORIGINS`` (comma-separated) in production to restrict to the deployed
+    frontend origin only.
+    """
+    env_name = api_cfg.get("cors_origins_env", "CORS_ORIGINS")
+    raw = os.environ.get(env_name, "")
+    if raw.strip():
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return list(api_cfg["cors_origins"])
 
 OPENAPI_TAGS = [
     {"name": "calibration", "description": "Fit Heston to the live SPX surface; background jobs."},
@@ -59,6 +98,10 @@ async def lifespan(app: FastAPI):
     app.state.cache = build_cache(config)
     app.state.jobs = {}  # background calibration-job registry
     app.state.regime_warm = False
+    log.info(
+        "startup",
+        extra={"cache_backend": app.state.cache.backend, "sentry": app.state.sentry_on},
+    )
 
     # Warm the (fast) synthetic regime model when offline so the first call is instant.
     # In live mode we warm lazily to avoid blocking startup on a 20y network pull.
@@ -75,8 +118,11 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     config = load_config(CONFIG_PATH)
     api_cfg = config["api"]
+
+    sentry_on = _init_sentry(api_cfg["version"])
 
     app = FastAPI(
         title=api_cfg["title"],
@@ -85,14 +131,44 @@ def create_app() -> FastAPI:
         openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
     )
+    app.state.sentry_on = sentry_on
 
+    # Compress large JSON payloads (surfaces, regime history) over the wire.
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+
+    # CORS: restrict to the deployed frontend origin in production via CORS_ORIGINS.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=list(api_cfg["cors_origins"]),
+        allow_origins=_cors_origins(api_cfg),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        """Emit one structured log line per request (and per unhandled error)."""
+        request_id = uuid.uuid4().hex[:12]
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            log.exception(
+                "request_error",
+                extra={"request_id": request_id, "method": request.method,
+                       "path": request.url.path, "duration_ms": duration_ms},
+            )
+            raise
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        log.info(
+            "request",
+            extra={"request_id": request_id, "method": request.method,
+                   "path": request.url.path, "status": response.status_code,
+                   "duration_ms": duration_ms},
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     app.include_router(calibration.router)
     app.include_router(surface.router)

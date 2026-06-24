@@ -21,3 +21,4 @@ pydantic>=2.6
 pydantic-settings>=2.2
 redis>=5.0            # API degrades to an in-process cache if redis is unreachable
 httpx>=0.27           # used by fastapi TestClient in tests
+sentry-sdk>=2.0       # optional error tracking (no-op unless SENTRY_DSN is set)
