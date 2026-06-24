@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-base text-ink antialiased;
+    font-feature-settings: 'tnum' 1; /* tabular numerals for aligned figures */
+  }
+
+  /* Thin dark scrollbars to match the terminal aesthetic. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-edge rounded;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-base;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-panel border border-edge rounded-xl;
+  }
+  .card-pad {
+    @apply p-4 sm:p-5;
+  }
+  .stat-label {
+    @apply text-xs uppercase tracking-wider text-muted;
+  }
+}

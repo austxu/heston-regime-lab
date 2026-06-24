@@ -1,0 +1,19 @@
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// Dev server proxies API + WebSocket to the FastAPI backend so the frontend can use
+// same-origin relative URLs (no CORS in dev). In Docker, nginx does the same proxying.
+const API_TARGET = process.env.VITE_API_TARGET ?? 'http://localhost:8000'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': { target: API_TARGET, changeOrigin: true },
+      '/ws': { target: API_TARGET, changeOrigin: true, ws: true },
+      '/health': { target: API_TARGET, changeOrigin: true },
+    },
+  },
+})
