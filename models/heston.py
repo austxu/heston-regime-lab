@@ -162,3 +162,124 @@ def heston_characteristic_function(
 
     drift = iu * (np.log(spot) + (rate - div_yield) * tau)
     return np.exp(C + D * v0 + drift)
+
+
+# --------------------------------------------------------------------------- #
+# Gil-Pelaez Fourier inversion via Gauss-Legendre quadrature                   #
+# --------------------------------------------------------------------------- #
+#
+# Gil-Pelaez (1951) inverts a characteristic function into the survival
+# probability without ever forming the density:
+#
+#     P(X > a) = 1/2 + (1/pi) integral_0^inf Re[ e^{-i u a} phi(u) / (i u) ] du.
+#
+# A European call paying (S_T - K)^+ has the Heston price
+#
+#     Call = S0 e^{-q tau} P1 - K e^{-r tau} P2,
+#
+# where P2 = Q(S_T > K) is the risk-neutral exercise probability and P1 is the
+# same probability under the stock-as-numeraire ("delta") measure.  With
+# phi(u) = E[e^{i u ln S_T}] and forward F = phi(-i) = S0 e^{(r-q) tau},
+#
+#     P2 = 1/2 + (1/pi) integral_0^inf Re[ e^{-i u ln K} phi(u)      / (i u) ] du,
+#     P1 = 1/2 + (1/pi) integral_0^inf Re[ e^{-i u ln K} phi(u - i)  / (i u F) ] du.
+#
+# The semi-infinite integral is truncated at an upper limit U and evaluated with
+# Gauss-Legendre quadrature.  Legendre nodes are strictly interior to the
+# interval, so the removable 1/(i u) singularity at u = 0 is never sampled.
+
+import functools
+
+
+@functools.lru_cache(maxsize=16)
+def _gauss_legendre_nodes(n_nodes: int, upper_limit: float) -> tuple:
+    """Gauss-Legendre nodes and weights mapped from [-1, 1] onto (0, U).
+
+    ``numpy.polynomial.legendre.leggauss`` returns ``n`` nodes/weights for the
+    canonical interval [-1, 1].  The affine map  u = (U/2)(t + 1)  carries them
+    onto (0, U) with the Jacobian (U/2) folded into the weights.  Cached because
+    the nodes depend only on (n_nodes, U), not on any model parameters.
+
+    Returns
+    -------
+    (nodes, weights) : tuple of np.ndarray
+        ``nodes`` in (0, U); ``weights`` already include the (U/2) Jacobian.
+    """
+    t, w = np.polynomial.legendre.leggauss(n_nodes)
+    nodes = 0.5 * upper_limit * (t + 1.0)
+    weights = 0.5 * upper_limit * w
+    return nodes, weights
+
+
+def heston_price(
+    params: HestonParams,
+    spot: float,
+    strike: float | np.ndarray,
+    rate: float,
+    div_yield: float,
+    tau: float,
+    option_type: str = "call",
+    n_nodes: int = 128,
+    upper_limit: float = 200.0,
+) -> float | np.ndarray:
+    """Price a European option under Heston by Gil-Pelaez Fourier inversion.
+
+    The characteristic function for a given maturity is independent of the strike,
+    so when ``strike`` is an array we evaluate phi(u) and phi(u - i) once at the
+    quadrature nodes and reuse them across all strikes (only the e^{-i u ln K}
+    factor changes).  This is the hot path during calibration.
+
+    Parameters
+    ----------
+    params : HestonParams
+        The five Heston parameters.
+    spot : float
+        Current asset price S0.
+    strike : float or array of float
+        Strike(s) K.  A scalar returns a float; an array returns an array.
+    rate, div_yield : float
+        Continuously-compounded rate r and dividend yield q.
+    tau : float
+        Time to maturity in years.
+    option_type : {"call", "put"}
+        "put" is obtained from the call by put-call parity.
+    n_nodes : int
+        Number of Gauss-Legendre nodes.
+    upper_limit : float
+        Truncation U of the Fourier integral.
+
+    Returns
+    -------
+    float or np.ndarray
+        Option price(s), matching the shape of ``strike``.
+    """
+    strikes = np.atleast_1d(np.asarray(strike, dtype=float))
+    nodes, weights = _gauss_legendre_nodes(n_nodes, float(upper_limit))
+
+    # Characteristic function at u (for P2) and at u - i (for P1), evaluated once.
+    phi_u = heston_characteristic_function(nodes, params, spot, rate, div_yield, tau)
+    phi_ui = heston_characteristic_function(nodes - 1j, params, spot, rate, div_yield, tau)
+    forward = spot * np.exp((rate - div_yield) * tau)  # = phi(-i), closed form
+
+    iu = 1j * nodes
+    # Strike-dependent factor e^{-i u ln K}: shape (n_strikes, n_nodes).
+    log_k = np.log(strikes)[:, None]
+    phase = np.exp(-1j * nodes[None, :] * log_k)
+
+    integrand_2 = (phase * phi_u[None, :] / iu[None, :]).real
+    integrand_1 = (phase * phi_ui[None, :] / (iu[None, :] * forward)).real
+
+    p2 = 0.5 + (weights[None, :] * integrand_2).sum(axis=1) / np.pi
+    p1 = 0.5 + (weights[None, :] * integrand_1).sum(axis=1) / np.pi
+
+    call = spot * np.exp(-div_yield * tau) * p1 - strikes * np.exp(-rate * tau) * p2
+
+    if option_type == "call":
+        price = call
+    elif option_type == "put":
+        # Put-call parity: P = C - S0 e^{-q tau} + K e^{-r tau}.
+        price = call - spot * np.exp(-div_yield * tau) + strikes * np.exp(-rate * tau)
+    else:
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+
+    return float(price[0]) if np.isscalar(strike) or np.ndim(strike) == 0 else price
