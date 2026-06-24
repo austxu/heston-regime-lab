@@ -103,9 +103,14 @@ def heston_characteristic_function(
 ) -> np.ndarray:
     """Characteristic function phi(u) = E[exp(i u ln S_T)] of the Heston log-price.
 
-    Uses the original Heston (1993) parameterisation (the "g1" branch).  This is
-    correct, but the complex logarithm in ``C`` can cross a branch cut for long
-    maturities; a numerically stabilised version is introduced later.
+    Uses the numerically stable "little Heston trap" parameterisation (Albrecher,
+    Mayer, Schoutens & Tistaert, 2007).  The original Heston (1993) form is written
+    with  g1 = (xi + d)/(xi - d)  and the factor  e^{+d tau}; because Re(d) > 0 that
+    grows without bound and *overflows* for long maturities, and the complex
+    logarithm of (1 - g1 e^{d tau}) crosses a branch cut, corrupting the integral.
+    The trap rewrites it with  g2 = 1/g1 = (xi - d)/(xi + d)  and  e^{-d tau}, which
+    decays to 0, so (1 - g2 e^{-d tau}) stays near 1 on the principal branch.  The
+    two forms are analytically identical; only the trap is numerically safe.
 
     Parameters
     ----------
@@ -131,11 +136,11 @@ def heston_characteristic_function(
     Notes
     -----
     With xi = kappa - rho sigma i u and
-        d = sqrt( (rho sigma i u - kappa)^2 + sigma^2 (i u + u^2) ),
-        g = (xi + d) / (xi - d),
+        d  = sqrt( (rho sigma i u - kappa)^2 + sigma^2 (i u + u^2) ),
+        g2 = (xi - d) / (xi + d),
     the exponent is C + D v0 + i u (ln S0 + (r - q) tau), where
-        C = (kappa theta / sigma^2)[(xi + d) tau - 2 ln((1 - g e^{d tau})/(1 - g))],
-        D = ((xi + d) / sigma^2)(1 - e^{d tau})/(1 - g e^{d tau}).
+        C = (kappa theta / sigma^2)[(xi - d) tau - 2 ln((1 - g2 e^{-d tau})/(1 - g2))],
+        D = ((xi - d) / sigma^2)(1 - e^{-d tau})/(1 - g2 e^{-d tau}).
     """
     u = np.asarray(u, dtype=np.complex128)
 
@@ -151,14 +156,14 @@ def heston_characteristic_function(
     xi = kappa - rho * sigma * iu
     d = np.sqrt((rho * sigma * iu - kappa) ** 2 + sigma**2 * (iu + u**2))
 
-    g = (xi + d) / (xi - d)
-    exp_dt = np.exp(d * tau)
+    # "Little trap": g2 = (xi - d)/(xi + d) paired with the decaying e^{-d tau}.
+    g2 = (xi - d) / (xi + d)
+    exp_dt = np.exp(-d * tau)
 
-    # C and D (Heston's A/B up to constants), original g1 branch.
     C = (kappa * theta / sigma**2) * (
-        (xi + d) * tau - 2.0 * np.log((1.0 - g * exp_dt) / (1.0 - g))
+        (xi - d) * tau - 2.0 * np.log((1.0 - g2 * exp_dt) / (1.0 - g2))
     )
-    D = (xi + d) / sigma**2 * (1.0 - exp_dt) / (1.0 - g * exp_dt)
+    D = (xi - d) / sigma**2 * (1.0 - exp_dt) / (1.0 - g2 * exp_dt)
 
     drift = iu * (np.log(spot) + (rate - div_yield) * tau)
     return np.exp(C + D * v0 + drift)
