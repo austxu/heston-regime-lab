@@ -1,0 +1,43 @@
+name: Deploy
+
+# Runs only after CI succeeds on the default branch, so we never deploy a red build.
+# Deploys the API and frontend services to Railway via the Railway CLI. It no-ops cleanly
+# until a RAILWAY_TOKEN secret is configured (you can't `if:` on a secret directly, so we
+# surface it as a job env var and gate the steps on it).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, master]
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Railway token
+        id: guard
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN not set — skipping deploy. Add it in repo Settings → Secrets."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Railway CLI
+        if: steps.guard.outputs.deploy == 'true'
+        run: npm i -g @railway/cli
+
+      - name: Deploy API service
+        if: steps.guard.outputs.deploy == 'true'
+        run: railway up --service "${{ vars.RAILWAY_API_SERVICE || 'api' }}" --detach
+
+      - name: Deploy frontend service
+        if: steps.guard.outputs.deploy == 'true'
+        run: railway up --service "${{ vars.RAILWAY_FRONTEND_SERVICE || 'frontend' }}" --detach
