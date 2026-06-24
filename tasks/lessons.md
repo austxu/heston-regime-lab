@@ -25,3 +25,18 @@ is the cost.
 2026-06-24 | xgboost imported but failed to load its native lib (libxgboost.dylib ->
 libomp.dylib not found) on macOS | xgboost needs the OpenMP runtime: `brew install libomp`.
 Guard the import and fall back to sklearn GradientBoosting so the residual model still runs.
+
+2026-06-24 | `tsc -b --noEmit` errors ("--noEmit cannot be specified with --build") | For a
+typecheck script use `tsc --noEmit -p tsconfig.app.json` (or plain `tsc -b`, since the app
+tsconfig already sets noEmit). Don't combine `-b` with `--noEmit`.
+
+2026-06-24 | The frontend nginx `proxy_pass http://api:8000` only resolves under
+docker-compose (shared network alias). On Railway, services don't see each other by bare
+name | For Railway, build the frontend with `VITE_API_BASE` = the API's public URL (the SPA
+calls it cross-origin; API allows it via `CORS_ORIGINS`), or use the `*.railway.internal`
+host. Keep the build arg so compose (empty -> nginx proxy) and Railway both work.
+
+2026-06-24 | Can't deploy to Railway from this environment (needs the user's account/login).
+| For deploy phases, produce all config + CI/CD that auto-deploys once a token secret exists,
+document the manual steps in DEPLOY.md, and use a placeholder live URL — be explicit that the
+deploy itself is the user's step rather than implying it's done.
