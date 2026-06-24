@@ -1,37 +1,35 @@
-# TODO — Phase 3: React analytics dashboard
+# TODO — Phase 4: Deploy, CI/CD, production hardening
 
-A clean, dark, professional React+TS frontend consuming the Phase 2 API. Plotly charts,
-React Query data fetching, native WebSocket for live calibration.
+Ship the full stack as a live app with CI/CD and production hardening.
+
+**Reality check:** the actual Railway deploy requires the user's Railway account/login, which
+this environment can't do. I produce all deploy config + CI/CD (auto-deploys once a
+RAILWAY_TOKEN secret exists) + a DEPLOY.md, and use a placeholder live URL until deployed.
 
 ## Plan (each step has a verify condition)
-- [ ] Surface per-regime bootstrap samples from the API for real density plots
-      → verify: GET /api/regime/parameters returns `param_samples`; tests still green
-- [ ] Scaffold Vite React-TS in frontend/, install deps (react-query, plotly, tailwind v3)
-      → verify: `npm run build` succeeds on the empty scaffold
-- [ ] Tailwind dark theme + base layout/nav (4 tabs)
-      → verify: app renders nav; tsc clean
-- [ ] api/client.ts + TS types mirroring schemas + React Query provider
-      → verify: typed client compiles; types match backend fields
-- [ ] hooks: useWebSocket (exp-backoff reconnect), useCalibration, useRegime*, useSurface, useComparison, useHealth
-      → verify: tsc clean; ws hook reconnects
-- [ ] shared: Skeleton, ErrorBoundary, StalenessIndicator, ProvenanceBadge, Card, Tooltip
-      → verify: components compile and are reused across views
-- [ ] VolSurface view: market vs model 3D surfaces + error heatmap; maturity/strike controls
-      → verify: builds; consumes /api/surface shape
-- [ ] CalibrationPanel: trigger button, live convergence (loss + param paths), param card, error badge
-      → verify: builds; WS messages typed; badge thresholds 3%/5%
-- [ ] RegimeDashboard: current badge + posterior bars, SPX history with regime bands, density plots, error-by-regime
-      → verify: builds; consumes current/history/parameters
-- [ ] ModelComparison: error table (BS/Heston/corrected), moneyness+maturity buckets, key-finding callout
-      → verify: builds; consumes /api/comparison
-- [ ] Skeletons + error boundaries + staleness indicator wired throughout
-      → verify: every data panel has loading + error fallback
-- [ ] docker/Dockerfile.frontend + docker-compose frontend service
-      → verify: compose config valid
-- [ ] tsc --noEmit + vite build green; dev server serves; commit in focused batches
-      → verify: `npm run build` exits 0; `tsc --noEmit` clean
+- [ ] Production hardening (API):
+      - gzip response compression → verify: Content-Encoding: gzip on large responses
+      - CORS from env (prod = deployed origin only) → verify: CORS_ORIGINS overrides config
+      - structured JSON logging + request middleware → verify: JSON log line per request
+      - Sentry init guarded by SENTRY_DSN → verify: no-op without DSN, inits with it
+      - rate limit calibration endpoint (1/min/IP) → verify: 2nd call within window → 429
+      - yfinance request timeout → cache/synthetic fallback → verify: timeout raises DataUnavailable
+- [ ] CI: .github/workflows/ci.yml — pytest + tsc on push(main/master) & PR
+      → verify: workflow YAML valid; steps mirror local commands
+- [ ] CD: deploy to Railway on push to main (after CI), gated on RAILWAY_TOKEN
+      → verify: deploy job present, conditional, documented
+- [ ] Railway config: railway.json (api), frontend/railway.json, DEPLOY.md, redis volume notes
+      → verify: configs reference the right Dockerfiles + healthcheck
+- [ ] visualization/plots.py: diagnostic charts (surface fit, regime overlay, comparison, convergence)
+      → verify: running it writes PNGs under docs/assets/
+- [ ] README: badges, live-demo placeholder, mermaid architecture diagram, embedded charts,
+      research findings, local dev + API docs link
+      → verify: renders; badges point at the repo's Actions
+- [ ] Tests for hardening (rate limit, gzip); full pytest + tsc + build green
+      → verify: `pytest -q` green; `npm run build` green
+- [ ] Commit in focused batches; push
 
 ## Done when
-All four views build and consume the live API, dark-themed, with skeletons, error
-boundaries, staleness indicator, and a working WebSocket convergence chart; frontend
-dockerised and added to compose.
+CI runs tests+typecheck on every push/PR and auto-deploys to Railway on main (once the
+token is set); the API is hardened (gzip, rate limit, JSON logs, Sentry, timeouts); the
+README has badges, an architecture diagram, embedded charts, and a live-demo link slot.

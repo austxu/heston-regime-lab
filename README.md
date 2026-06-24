@@ -1,12 +1,43 @@
 # heston-regime-lab
 
+[![CI](https://github.com/austxu/heston-regime-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/austxu/heston-regime-lab/actions/workflows/ci.yml)
+[![Deploy](https://github.com/austxu/heston-regime-lab/actions/workflows/deploy.yml/badge.svg)](https://github.com/austxu/heston-regime-lab/actions/workflows/deploy.yml)
+![Python](https://img.shields.io/badge/python-3.12%2B-3776ab?logo=python&logoColor=white)
+![React](https://img.shields.io/badge/react-19-149eca?logo=react&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-71%20passing-34d399)
+
 Stochastic-volatility research lab: calibrate the **Heston** model to SPX options, detect
 market **regimes** with a hidden Markov model, and study how Heston parameters and
-calibration error change across regimes.
+calibration error change across regimes — served as a live API with a React dashboard.
 
-> **Status: Phase 3 / 4 — analytics dashboard.** The math core (Phase 1) and the FastAPI
-> backend (Phase 2) are complete; a React + TypeScript dashboard now visualises the live
-> API — vol surfaces, streaming calibration, regimes, and model comparison.
+**🔗 Live demo:** _set after the first Railway deploy_ — see [DEPLOY.md](DEPLOY.md) · **API docs:** `/docs` on the deployed API
+
+> **Status: Phase 4 / 4 — deployed.** Math core, FastAPI backend, and React dashboard are
+> complete; CI/CD (GitHub Actions → Railway), production hardening (rate limiting, gzip,
+> JSON logging, Sentry), and deployment config are in place.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph sources["Market data"]
+    yf["yfinance · SPX / VIX"]
+    fred["FRED · risk-free rate"]
+  end
+  yf --> API
+  fred --> API
+  subgraph backend["FastAPI backend"]
+    API["REST + WebSocket<br/>calibration · surface · regime · comparison"]
+    REDIS[("Redis cache<br/>session-keyed, persistent")]
+    API <--> REDIS
+  end
+  API -. "live fetch fails" .-> SYN["Deterministic<br/>synthetic fallback"]
+  API -->|"JSON + /ws stream"| FE["React + Plotly<br/>dashboard"]
+  FE --> USER((Browser))
+```
+
+Data flows **yfinance/FRED → FastAPI → Redis → React**, with a deterministic synthetic
+fallback at the data layer so every component runs offline.
 
 ## Phases
 1. **Math core ✅:** Heston characteristic function, Gil-Pelaez Fourier inversion with
@@ -15,11 +46,13 @@ calibration error change across regimes.
 2. **Backend + API ✅:** yfinance/FRED data layer with a deterministic synthetic fallback,
    vol features, 3-state Gaussian HMM regimes, XGBoost residual correction, Kruskal-Wallis +
    regime-conditional calibration — all served by a FastAPI + Redis + WebSocket backend.
-3. **Frontend dashboard ✅ (this phase):** React + TypeScript + Tailwind + Plotly + React
-   Query dashboard with four views (Vol Surface, Live Calibration, Regime Dashboard, Model
-   Comparison), a WebSocket convergence chart, skeletons, error boundaries, and a staleness
-   indicator.
-4. Deeper regime study and recalibration (Phase 4).
+3. **Frontend dashboard ✅:** React + TypeScript + Tailwind + Plotly + React Query dashboard
+   with four views (Vol Surface, Live Calibration, Regime Dashboard, Model Comparison), a
+   WebSocket convergence chart, skeletons, error boundaries, and a staleness indicator.
+4. **Deploy + CI/CD + hardening ✅ (this phase):** GitHub Actions CI (pytest + `tsc` +
+   image builds) and CD (auto-deploy to Railway on green main), Railway config for
+   API/Redis/frontend, and production hardening — calibration rate limiting, gzip, request
+   timeouts with cache fallback, structured JSON logging, and Sentry.
 
 ## Quickstart
 ```bash
@@ -50,12 +83,16 @@ data/fetchers.py            yfinance/FRED fetchers + deterministic synthetic fal
 data/features.py            realized vol, VIX level/slope, return skew, volume ratio
 analysis/pricing_comparison.py  BS vs Heston vs XGBoost residual correction
 analysis/regime_analysis.py     Kruskal-Wallis + static-vs-regime-conditional calibration
-api/                        FastAPI app: routes, services, cache, websocket, schemas
+api/                        FastAPI app: routes, services, cache, websocket, schemas,
+                            ratelimit, logging_config (gzip/CORS/Sentry in main.py)
 frontend/                   React + TS + Tailwind + Plotly dashboard (Vite)
+visualization/plots.py      diagnostic charts -> docs/assets/ (README figures)
 docker/                     Dockerfile.api, Dockerfile.frontend, nginx.conf
 docker-compose.yml          frontend + api + redis stack
+railway.json, frontend/railway.json   Railway config-as-code; see DEPLOY.md
+.github/workflows/          ci.yml (pytest + tsc + image build), deploy.yml (Railway)
 configs/base.yaml           all hyperparameters
-tests/                      pytest suites (test_synthetic.py, test_phase2_api.py)
+tests/                      pytest suites (synthetic, phase2 API, phase4 hardening)
 ```
 
 The mathematical derivations (characteristic function, Gil-Pelaez inversion, HMM) are in
@@ -105,6 +142,41 @@ every panel; each panel has skeleton loading, an error boundary, and a staleness
 
 In dev the Vite server proxies `/api` and `/ws` to the backend; in Docker, nginx does the
 same so the browser is always same-origin.
+
+## Results
+
+Charts below are regenerated from the offline pipeline with `python -m visualization.plots`.
+
+**Heston fit to the SPX vol smile** — Heston bends to the market smile/skew across
+maturities; mean implied-vol error ≈ 0.1% on the synthetic surface (target < 3%).
+
+![Heston vol smile fit](docs/assets/vol_surface_fit.png)
+
+**Volatility regimes over SPX** — a 3-state Gaussian HMM separates calm / elevated / crisis
+regimes (states ordered by realized vol); crises cluster around drawdowns.
+
+![HMM regimes over SPX](docs/assets/regime_overlay.png)
+
+**Pricing error by moneyness** — calibrated Heston roughly halves at-the-money error versus
+flat Black-Scholes; an out-of-fold XGBoost residual model trims the remaining structured
+error. Kruskal-Wallis confirms σ, ρ and v₀ differ significantly across regimes (p < 0.01),
+and regime-conditional calibration beats a single static fit.
+
+![BS vs Heston vs residual](docs/assets/model_comparison.png)
+
+**Calibration convergence** — L-BFGS-B drives the IV-space objective down many orders of
+magnitude in a few dozen iterations (streamed live over `/ws/calibration`).
+
+![Calibration convergence](docs/assets/calibration_convergence.png)
+
+## Production & deployment
+
+The API is hardened for production: per-IP **rate limiting** on the calibration endpoint
+(1/min), **gzip** compression, **request timeouts** on live data with cache/synthetic
+fallback, **structured JSON logging** with request IDs, and optional **Sentry** error
+tracking (enabled by `SENTRY_DSN`). CI/CD runs on GitHub Actions and deploys to **Railway**
+(API + managed Redis with a persistent volume + frontend behind nginx). See
+[DEPLOY.md](DEPLOY.md) for the full setup.
 
 ## Mathematical background
 

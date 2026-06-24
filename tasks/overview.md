@@ -5,9 +5,10 @@ A stochastic-volatility research lab. Calibrate the Heston model to SPX options,
 market regimes with an HMM, and study how Heston parameters and calibration error vary
 across regimes — exposed as a live API.
 
-**Current status: Phase 3 — React analytics dashboard.** Phase 1 (math core) and Phase 2
-(FastAPI backend) are complete; Phase 3 added a React + TypeScript + Tailwind + Plotly +
-React Query frontend in `frontend/` that consumes the live API.
+**Current status: Phase 4 — deployed (CI/CD + hardening).** All four phases are complete:
+math core, FastAPI backend, React dashboard, and now deployment config (Railway), GitHub
+Actions CI/CD, and production hardening. The actual Railway deploy is the user's step
+(needs their account/token); everything is wired so it auto-deploys on green main.
 
 Phases:
 - Phase 1 ✅ Math core (char. fn, Gil-Pelaez/Gauss-Legendre, BS+IV, calibration, round-trip).
@@ -15,7 +16,9 @@ Phases:
   Kruskal-Wallis/regime-conditional analysis, FastAPI/Redis/WebSocket API, Docker.
 - Phase 3 ✅ React dashboard: Vol Surface, Live Calibration (WS), Regime Dashboard, Model
   Comparison; skeletons, error boundaries, staleness indicator; dockerised behind nginx.
-- Phase 4: deeper regime study and recalibration.
+- Phase 4 ✅ GitHub Actions CI (pytest + tsc + image build) and CD (Railway), Railway
+  config, production hardening (rate limit, gzip, request timeout, JSON logging, Sentry),
+  diagnostic charts, final README. See DEPLOY.md.
 
 ## 2. Tech Stack
 - Python 3.14 locally (Docker image uses 3.12-slim). numpy, scipy, pandas.
@@ -50,6 +53,11 @@ frontend/src/api/         typed client.ts + types.ts mirroring the Pydantic sche
 frontend/src/hooks/       useWebSocket (backoff), useCalibration, useRegime, useApiQueries
 frontend/src/components/  VolSurface, CalibrationPanel, RegimeDashboard, ModelComparison, ui/
 frontend/src/lib/         theme, dataMode (live/synthetic context), kde, format, params
+api/ratelimit.py          per-IP rate limiter (cache-backed) for /api/calibration/run
+api/logging_config.py     JSON log formatter + configure_logging()
+visualization/plots.py    diagnostic charts -> docs/assets/*.png (README figures)
+.github/workflows/        ci.yml (pytest + tsc + image build), deploy.yml (Railway, on green CI)
+railway.json + frontend/railway.json   Railway config-as-code; DEPLOY.md = full guide
 docker/                   Dockerfile.api, Dockerfile.frontend (nginx), nginx.conf
 docker-compose.yml        frontend (:3000) + api (:8000) + redis (:6379)
 configs/base.yaml         all hyperparameters (market, quadrature, calibration, data,
@@ -71,6 +79,9 @@ to the backend) -> Plotly views; a global live/synthetic toggle keys every query
 - Frontend dev: `cd frontend && npm install && npm run dev` -> http://localhost:5173
   (proxies /api + /ws to :8000). Build/typecheck: `npm run build`.
 - Full stack: `docker compose up --build` (frontend :3000, api :8000, redis :6379)
+- Regenerate README charts: `.venv/bin/python -m visualization.plots` -> docs/assets/
+- Deploy: GitHub Actions auto-deploys to Railway on green main (needs RAILWAY_TOKEN secret);
+  see DEPLOY.md. CI mirrors local: `pytest tests/ -q` + `cd frontend && npm run typecheck`.
 
 ## 5. Conventions & Gotchas
 - Char. function uses the **"little Heston trap"** g2 formulation — do NOT switch to g1.
@@ -99,3 +110,12 @@ to the backend) -> Plotly views; a global live/synthetic toggle keys every query
   `AnalysisPendingError` and polls via React Query `refetchInterval` (rendered as "computing").
 - Three additive, non-breaking fields were added to `RegimeParametersResponse` for the
   dashboard: `param_samples`, `static_mae_by_regime`, `regime_mae_by_regime`.
+- **Hardening:** `/api/calibration/run` is rate-limited (1/min/IP, cache-backed, config
+  `api.rate_limit`); gzip via GZipMiddleware; live fetches have a `data.request_timeout`
+  (thread + future timeout) that falls back to cache/synthetic; JSON request logging with
+  X-Request-ID; Sentry inits only if `SENTRY_DSN` set; prod CORS from `CORS_ORIGINS` env.
+- **CI/CD:** ci.yml runs on push/PR; deploy.yml triggers via `workflow_run` only after CI
+  succeeds on main/master and no-ops without `RAILWAY_TOKEN`. Default branch here is
+  `master`; workflows trigger on both main and master.
+- Rate-limit tests use a fresh app per test (function-scoped client) so buckets are clean;
+  only `/api/calibration/run` is limited, so other endpoints' tests are unaffected.
