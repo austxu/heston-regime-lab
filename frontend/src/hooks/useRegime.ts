@@ -5,7 +5,7 @@ import type {
   RegimeHistoryResponse,
   RegimeParametersResponse,
 } from '../api/types'
-import { useDataMode } from '../lib/dataMode'
+import { useDataMode } from '../lib/dataModeContext'
 
 export function useRegimeCurrent() {
   const { preferLive } = useDataMode()
@@ -29,10 +29,11 @@ export function useRegimeHistory(downsample = 5) {
  * the background; we poll every few seconds until it's ready, then stop. The pending state
  * is carried as `AnalysisPendingError` and rendered as "computing" rather than an error.
  */
-export function useRegimeParameters() {
+export function useRegimeParameters(enabled = true) {
   return useQuery<RegimeParametersResponse, Error>({
     queryKey: ['regime-parameters'],
     queryFn: ({ signal }) => api.regimeParameters(signal),
+    enabled,
     refetchInterval: (query) =>
       (!!query.state.error && query.state.error instanceof AnalysisPendingError) || !query.state.data
         ? 4_000

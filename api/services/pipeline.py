@@ -13,9 +13,8 @@ shared across the calibration, surface and comparison endpoints within a trading
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
-import numpy as np
 import pandas as pd
 
 from api.cache.redis_client import Cache, CacheResult, session_suffix
@@ -45,8 +44,12 @@ def snapshot_from_dict(d: dict) -> ChainSnapshot:
     """Inverse of :func:`snapshot_to_dict`."""
     chain = pd.DataFrame(d["chain"], columns=CHAIN_COLUMNS)
     return ChainSnapshot(
-        spot=float(d["spot"]), rate=float(d["rate"]), div_yield=float(d["div_yield"]),
-        chain=chain, source=d["source"], as_of=datetime.fromisoformat(d["as_of"]),
+        spot=float(d["spot"]),
+        rate=float(d["rate"]),
+        div_yield=float(d["div_yield"]),
+        chain=chain,
+        source=d["source"],
+        as_of=datetime.fromisoformat(d["as_of"]),
     )
 
 
@@ -54,11 +57,14 @@ def get_snapshot(
     config: dict, cache: Cache, prefer_live: bool = True
 ) -> tuple[ChainSnapshot, CacheResult]:
     """Cached market snapshot with live -> stale-cache -> synthetic fallback."""
-    key = f"snapshot:{session_suffix()}"
+    mode = "live" if prefer_live else "offline"
+    key = f"snapshot:v2:{session_suffix()}:{mode}"
     ttl = int(config["api"]["cache"]["calibration_ttl"])
 
     def live_producer() -> dict:
-        return snapshot_to_dict(get_market_snapshot(config, prefer_live=True, allow_synthetic=False))
+        return snapshot_to_dict(
+            get_market_snapshot(config, prefer_live=True, allow_synthetic=False)
+        )
 
     def synthetic_fallback() -> dict:
         return snapshot_to_dict(get_market_snapshot(config, prefer_live=False))
@@ -71,13 +77,17 @@ def get_snapshot(
     return snapshot_from_dict(res.value), res
 
 
-def build_market_data(
-    snapshot: ChainSnapshot, config: dict
-) -> tuple[MarketData, dict]:
+def build_market_data(snapshot: ChainSnapshot, config: dict) -> tuple[MarketData, dict]:
     """Filter to liquid options and assemble a calibration :class:`MarketData`."""
     liquid, report = filter_liquid_options(snapshot, config)
+    if liquid.empty:
+        raise DataUnavailable(
+            f"no liquid option quotes remain after filtering; filter counts={report.as_dict()}"
+        )
     data = MarketData(
-        spot=snapshot.spot, rate=snapshot.rate, div_yield=snapshot.div_yield,
+        spot=snapshot.spot,
+        rate=snapshot.rate,
+        div_yield=snapshot.div_yield,
         strikes=liquid["strike"].to_numpy(),
         maturities=liquid["maturity"].to_numpy(),
         market_iv=liquid["market_iv"].to_numpy(),

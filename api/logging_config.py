@@ -15,9 +15,7 @@ import sys
 from datetime import datetime, timezone
 
 # Standard LogRecord attributes we don't want to duplicate into the JSON "extra" fields.
-_RESERVED = set(
-    vars(logging.makeLogRecord({})).keys()
-) | {"message", "asctime", "taskName"}
+_RESERVED = set(vars(logging.makeLogRecord({})).keys()) | {"message", "asctime", "taskName"}
 
 
 class JsonFormatter(logging.Formatter):

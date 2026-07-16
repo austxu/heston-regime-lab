@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -105,8 +105,17 @@ class LiquidityReport:
 
 
 CHAIN_COLUMNS = [
-    "expiry", "maturity", "strike", "option_type",
-    "bid", "ask", "mid", "last", "volume", "open_interest", "market_iv",
+    "expiry",
+    "maturity",
+    "strike",
+    "option_type",
+    "bid",
+    "ask",
+    "mid",
+    "last",
+    "volume",
+    "open_interest",
+    "market_iv",
 ]
 
 
@@ -120,7 +129,10 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hrl-fetch")
 
 
 def _request_timeout(config: dict) -> float:
-    return float(config.get("data", {}).get("request_timeout", 8.0))
+    timeout = float(config.get("data", {}).get("request_timeout", 8.0))
+    if not np.isfinite(timeout) or timeout <= 0.0:
+        raise ValueError(f"data.request_timeout must be finite and > 0, got {timeout!r}")
+    return timeout
 
 
 def _call_with_timeout(timeout: float, fn, *args, **kwargs):
@@ -129,12 +141,14 @@ def _call_with_timeout(timeout: float, fn, *args, **kwargs):
     try:
         return future.result(timeout=timeout)
     except FuturesTimeout as exc:
+        future.cancel()
         raise DataUnavailable(f"live fetch timed out after {timeout:.0f}s") from exc
 
 
 # --------------------------------------------------------------------------- #
 # Live fetchers (yfinance / FRED).  Each raises DataUnavailable on any failure. #
 # --------------------------------------------------------------------------- #
+
 
 def fetch_price_history_live(ticker: str, years: int) -> pd.DataFrame:
     """Daily OHLCV history via yfinance, normalised to ``[close, volume]``.
@@ -152,8 +166,10 @@ def fetch_price_history_live(ticker: str, years: int) -> pd.DataFrame:
         if raw is None or raw.empty or "Close" not in raw.columns:
             raise DataUnavailable(f"empty history for {ticker}")
         df = pd.DataFrame(
-            {"close": raw["Close"].astype(float),
-             "volume": raw.get("Volume", pd.Series(index=raw.index, dtype=float)).astype(float)}
+            {
+                "close": raw["Close"].astype(float),
+                "volume": raw.get("Volume", pd.Series(index=raw.index, dtype=float)).astype(float),
+            }
         )
         df.index = pd.to_datetime(df.index).tz_localize(None)
         df = df.dropna(subset=["close"])
@@ -164,6 +180,24 @@ def fetch_price_history_live(ticker: str, years: int) -> pd.DataFrame:
         raise
     except Exception as exc:  # noqa: BLE001 — any failure routes to the fallback
         raise DataUnavailable(f"price-history fetch failed for {ticker}: {exc}") from exc
+
+
+def fetch_spot_live(ticker: str) -> float:
+    """Latest adjusted close via a small download suitable for request-time snapshots."""
+    try:
+        import yfinance as yf
+
+        raw = yf.Ticker(ticker).history(period="5d", auto_adjust=True)
+        if raw is None or raw.empty or "Close" not in raw.columns:
+            raise DataUnavailable(f"no recent close for {ticker}")
+        close = pd.to_numeric(raw["Close"], errors="coerce").dropna()
+        if close.empty or not np.isfinite(close.iloc[-1]) or close.iloc[-1] <= 0.0:
+            raise DataUnavailable(f"invalid recent close for {ticker}")
+        return float(close.iloc[-1])
+    except DataUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise DataUnavailable(f"spot fetch failed for {ticker}: {exc}") from exc
 
 
 def fetch_vix_term_structure_live(tickers: dict, years: int) -> pd.DataFrame:
@@ -208,7 +242,13 @@ def fetch_fred_rate_live(series_id: str, api_key: str | None) -> float:
 
 
 def fetch_options_chain_live(
-    underlying: str, spot: float, rate: float, div_yield: float, today: datetime
+    underlying: str,
+    spot: float,
+    rate: float,
+    div_yield: float,
+    today: datetime,
+    max_expiries: int | None = None,
+    target_days: tuple[int, ...] = (30, 90, 180, 365),
 ) -> pd.DataFrame:
     """Full options chain via yfinance, normalised to :data:`CHAIN_COLUMNS`.
 
@@ -221,9 +261,31 @@ def fetch_options_chain_live(
         import yfinance as yf
 
         tk = yf.Ticker(underlying)
-        expiries = tk.options
+        expiries = list(tk.options)
         if not expiries:
             raise DataUnavailable(f"no expiries for {underlying}")
+        if max_expiries is not None:
+            if max_expiries < 1:
+                raise ValueError("max_expiries must be >= 1")
+            today_date = pd.Timestamp(today.date())
+            future = [exp for exp in expiries if (pd.to_datetime(exp) - today_date).days > 0]
+            # Select representative tenors instead of the first N weeklies.  A bounded
+            # chain is much more likely to finish inside the API request timeout while
+            # retaining enough maturity coverage for calibration.
+            selected: list[str] = []
+            for target in target_days:
+                candidates = [exp for exp in future if exp not in selected]
+                if not candidates or len(selected) >= max_expiries:
+                    break
+                selected.append(
+                    min(
+                        candidates,
+                        key=lambda exp: abs((pd.to_datetime(exp) - today_date).days - target),
+                    )
+                )
+            if len(selected) < max_expiries:
+                selected.extend(exp for exp in future if exp not in selected)
+            expiries = selected[:max_expiries]
         rows = []
         for exp in expiries:
             try:
@@ -256,25 +318,31 @@ def _normalise_live_chain(
     raw: pd.DataFrame, spot: float, rate: float, div_yield: float
 ) -> pd.DataFrame:
     """Coerce a raw yfinance chain into the canonical schema, tolerating gaps."""
-    out = pd.DataFrame()
+
+    def numeric(name: str, default: float = np.nan) -> pd.Series:
+        values = raw[name] if name in raw.columns else pd.Series(default, index=raw.index)
+        return pd.to_numeric(values, errors="coerce")
+
+    out = pd.DataFrame(index=raw.index)
     out["expiry"] = raw["expiry"]
     out["maturity"] = raw["maturity"].astype(float)
-    out["strike"] = pd.to_numeric(raw.get("strike"), errors="coerce")
+    out["strike"] = numeric("strike")
     out["option_type"] = raw["option_type"]
-    out["bid"] = pd.to_numeric(raw.get("bid"), errors="coerce")
-    out["ask"] = pd.to_numeric(raw.get("ask"), errors="coerce")
-    out["last"] = pd.to_numeric(raw.get("lastPrice"), errors="coerce")
-    out["volume"] = pd.to_numeric(raw.get("volume"), errors="coerce").fillna(0.0)
-    out["open_interest"] = pd.to_numeric(raw.get("openInterest"), errors="coerce").fillna(0.0)
+    out["bid"] = numeric("bid")
+    out["ask"] = numeric("ask")
+    out["last"] = numeric("lastPrice")
+    out["volume"] = numeric("volume", 0.0).fillna(0.0)
+    out["open_interest"] = numeric("openInterest", 0.0).fillna(0.0)
 
-    # Mid from bid/ask when both present; otherwise fall back to last trade.
+    # Mid from a valid, non-crossed bid/ask pair; otherwise fall back to last trade.
     mid = (out["bid"] + out["ask"]) / 2.0
-    mid = mid.where((out["bid"] > 0) & (out["ask"] > 0), out["last"])
+    valid_market = (out["bid"] > 0) & (out["ask"] >= out["bid"])
+    mid = mid.where(valid_market, out["last"])
     out["mid"] = mid
 
     # Drop structurally unusable rows (no strike, no price).
-    out = out.dropna(subset=["strike"])
-    out = out[out["mid"] > 0]
+    out = out.dropna(subset=["strike", "maturity"])
+    out = out[(out["strike"] > 0) & (out["maturity"] > 0) & (out["mid"] > 0)]
 
     # Our own BS implied vol from the mid — the project's canonical price->IV map.
     out["market_iv"] = [
@@ -311,10 +379,21 @@ def synthetic_options_chain(
     n_t = int(syn["n_maturities"])
     half_spread = float(syn["rel_spread"])
     perturb = float(syn.get("smile_perturb", 0.0))
+    if n_k < 2 or n_t < 1:
+        raise ValueError("synthetic fallback requires n_strikes >= 2 and n_maturities >= 1")
+    if not 0.0 <= half_spread < 1.0:
+        raise ValueError("synthetic rel_spread must satisfy 0 <= rel_spread < 1")
 
     moneyness = np.linspace(0.80, 1.20, n_k)
     strikes = np.round(spot * moneyness, 0)
-    maturities = np.array([7, 30, 60, 90, 180, 365][:n_t]) / 365.0
+    standard_days = np.array([7, 30, 60, 90, 180, 365], dtype=float)
+    if n_t <= standard_days.size:
+        maturity_days = standard_days[:n_t]
+    else:
+        maturity_days = np.unique(np.round(np.geomspace(7, 730, n_t))).astype(float)
+        if maturity_days.size != n_t:
+            raise ValueError("n_maturities is too large to create distinct day tenors")
+    maturities = maturity_days / 365.0
 
     rows = []
     for tau in maturities:
@@ -322,7 +401,9 @@ def synthetic_options_chain(
         expiry = pd.Timestamp(today.date()) + pd.Timedelta(days=int(round(tau * 365)))
         for k in strikes:
             otype = "put" if k < forward else "call"  # quote the liquid OTM leg
-            heston_p = float(heston_price(_SYN_HESTON, spot, float(k), rate, div_yield, float(tau), otype))
+            heston_p = float(
+                heston_price(_SYN_HESTON, spot, float(k), rate, div_yield, float(tau), otype)
+            )
             base_iv = implied_vol(heston_p, spot, float(k), rate, div_yield, float(tau), otype)
             # A small non-Heston wing bump (convex in log-moneyness, decaying with tau) so
             # the offline "market" is not exactly Heston: calibration lands at a realistic
@@ -330,7 +411,11 @@ def synthetic_options_chain(
             lm = np.log(k / forward)
             bump = perturb * (lm / 0.20) ** 2 / (1.0 + 2.0 * tau)
             iv = float(base_iv + bump) if np.isfinite(base_iv) else base_iv
-            mid = bs_price(spot, float(k), rate, div_yield, float(tau), iv, otype) if np.isfinite(iv) else heston_p
+            mid = (
+                bs_price(spot, float(k), rate, div_yield, float(tau), iv, otype)
+                if np.isfinite(iv)
+                else heston_p
+            )
             mid = max(mid, 1e-6)
             bid = mid * (1.0 - half_spread)
             ask = mid * (1.0 + half_spread)
@@ -338,11 +423,21 @@ def synthetic_options_chain(
             depth = np.exp(-3.0 * abs(np.log(k / forward)))
             oi = float(max(0, int(5000 * depth + rng.integers(0, 50))))
             vol = float(max(0, int(1500 * depth + rng.integers(0, 30))))
-            rows.append({
-                "expiry": expiry, "maturity": float(tau), "strike": float(k),
-                "option_type": otype, "bid": bid, "ask": ask, "mid": mid,
-                "last": mid, "volume": vol, "open_interest": oi, "market_iv": iv,
-            })
+            rows.append(
+                {
+                    "expiry": expiry,
+                    "maturity": float(tau),
+                    "strike": float(k),
+                    "option_type": otype,
+                    "bid": bid,
+                    "ask": ask,
+                    "mid": mid,
+                    "last": mid,
+                    "volume": vol,
+                    "open_interest": oi,
+                    "market_iv": iv,
+                }
+            )
     return pd.DataFrame(rows, columns=CHAIN_COLUMNS)
 
 
@@ -364,11 +459,13 @@ def synthetic_price_history(config: dict) -> pd.DataFrame:
     drifts = np.array([0.12, 0.00, -0.30])
     stay = np.array([0.990, 0.965, 0.920])
     # Off-diagonal mass split toward the adjacent calmer/closer state.
-    trans = np.array([
-        [stay[0], 1 - stay[0], 0.0],
-        [(1 - stay[1]) * 0.6, stay[1], (1 - stay[1]) * 0.4],
-        [0.0, 1 - stay[2], stay[2]],
-    ])
+    trans = np.array(
+        [
+            [stay[0], 1 - stay[0], 0.0],
+            [(1 - stay[1]) * 0.6, stay[1], (1 - stay[1]) * 0.4],
+            [0.0, 1 - stay[2], stay[2]],
+        ]
+    )
 
     states = np.empty(n_days, dtype=int)
     states[0] = 0
@@ -414,14 +511,13 @@ def synthetic_vix_term_structure(price_history: pd.DataFrame) -> pd.DataFrame:
     vix9d = np.clip(vix - 0.5 * slope + rng.normal(0, 0.5, n), 5.0, None)
     vix3m = np.clip(vix + slope + rng.normal(0, 0.5, n), 5.0, None)
     vix = np.clip(vix, 5.0, None)
-    return pd.DataFrame(
-        {"vix9d": vix9d, "vix": vix, "vix3m": vix3m}, index=price_history.index
-    )
+    return pd.DataFrame({"vix9d": vix9d, "vix": vix, "vix3m": vix3m}, index=price_history.index)
 
 
 # --------------------------------------------------------------------------- #
 # Public wrappers: live-first, cache-friendly, synthetic last resort           #
 # --------------------------------------------------------------------------- #
+
 
 def get_price_history(config: dict, prefer_live: bool = True) -> FetchResult:
     """SPX daily history, live if reachable else synthetic (with provenance)."""
@@ -429,7 +525,9 @@ def get_price_history(config: dict, prefer_live: bool = True) -> FetchResult:
     years = int(config["data"]["history_years"])
     if prefer_live:
         try:
-            df = _call_with_timeout(_request_timeout(config), fetch_price_history_live, ticker, years)
+            df = _call_with_timeout(
+                _request_timeout(config), fetch_price_history_live, ticker, years
+            )
             return FetchResult(df, "live", _now(), ticker)
         except DataUnavailable:
             pass
@@ -448,7 +546,9 @@ def get_vix_term_structure(
     years = int(config["data"]["history_years"])
     if prefer_live:
         try:
-            df = _call_with_timeout(_request_timeout(config), fetch_vix_term_structure_live, tickers, years)
+            df = _call_with_timeout(
+                _request_timeout(config), fetch_vix_term_structure_live, tickers, years
+            )
             return FetchResult(df, "live", _now(), "VIX")
         except DataUnavailable:
             pass
@@ -463,8 +563,10 @@ def get_risk_free_rate(config: dict, prefer_live: bool = True) -> float:
         key = os.environ.get(config["data"].get("fred_api_key_env", "FRED_API_KEY"))
         try:
             return _call_with_timeout(
-                _request_timeout(config), fetch_fred_rate_live,
-                config["data"]["fred_rate_series"], key,
+                _request_timeout(config),
+                fetch_fred_rate_live,
+                config["data"]["fred_rate_series"],
+                key,
             )
         except DataUnavailable:
             pass
@@ -491,13 +593,22 @@ def get_market_snapshot(
     if prefer_live:
         timeout = _request_timeout(config)
         try:
-            spot = float(_call_with_timeout(
-                timeout, fetch_price_history_live,
-                config["data"]["spx_ticker"], int(config["data"]["history_years"]),
-            )["close"].iloc[-1])
+            spot = float(_call_with_timeout(timeout, fetch_spot_live, config["data"]["spx_ticker"]))
+            max_expiries = int(config["data"].get("max_option_expiries", 4))
+            target_days = tuple(
+                int(day)
+                for day in config["data"].get("option_expiry_target_days", [30, 90, 180, 365])
+            )
             chain = _call_with_timeout(
-                timeout, fetch_options_chain_live,
-                config["data"]["options_underlying"], spot, rate, div_yield, today,
+                timeout,
+                fetch_options_chain_live,
+                config["data"]["options_underlying"],
+                spot,
+                rate,
+                div_yield,
+                today,
+                max_expiries,
+                target_days,
             )
             if chain.empty:
                 raise DataUnavailable("live chain empty")
@@ -518,9 +629,15 @@ def get_market_snapshot(
 # Liquidity filtering                                                          #
 # --------------------------------------------------------------------------- #
 
+
 def _bs_abs_delta(
-    spot: float, strike: float, rate: float, div_yield: float, tau: float,
-    sigma: float, option_type: str,
+    spot: float,
+    strike: float,
+    rate: float,
+    div_yield: float,
+    tau: float,
+    sigma: float,
+    option_type: str,
 ) -> float:
     """|Black-Scholes delta| from market IV, for the deep-OTM cut."""
     from scipy.stats import norm
@@ -575,10 +692,18 @@ def filter_liquid_options(
     df = df[~wide]
 
     # Deep OTM by delta.
-    deltas = np.array([
-        _bs_abs_delta(snapshot.spot, k, snapshot.rate, snapshot.div_yield, t, iv, ot)
-        for k, t, iv, ot in zip(df["strike"], df["maturity"], df["market_iv"], df["option_type"])
-    ]) if len(df) else np.array([])
+    deltas = (
+        np.array(
+            [
+                _bs_abs_delta(snapshot.spot, k, snapshot.rate, snapshot.div_yield, t, iv, ot)
+                for k, t, iv, ot in zip(
+                    df["strike"], df["maturity"], df["market_iv"], df["option_type"]
+                )
+            ]
+        )
+        if len(df)
+        else np.array([])
+    )
     deep = deltas < float(liq["min_delta"]) if len(df) else np.array([], dtype=bool)
     rep.removed_deep_otm = int(deep.sum())
     df = df[~deep] if len(df) else df

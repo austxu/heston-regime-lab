@@ -5,10 +5,10 @@ A stochastic-volatility research lab. Calibrate the Heston model to SPX options,
 market regimes with an HMM, and study how Heston parameters and calibration error vary
 across regimes — exposed as a live API.
 
-**Current status: Phase 4 — deployed (CI/CD + hardening).** All four phases are complete:
-math core, FastAPI backend, React dashboard, and now deployment config (Railway), GitHub
-Actions CI/CD, and production hardening. The actual Railway deploy is the user's step
-(needs their account/token); everything is wired so it auto-deploys on green main.
+**Current status: Phase 4 — deployment-ready (CI/CD + hardening).** All four implementation
+phases are complete: math core, FastAPI backend, React dashboard, deployment config,
+GitHub Actions CI/CD, and production hardening. Creating the Railway project, domains, and
+token remains a user-owned step; no public deployment is claimed in this repository.
 
 Phases:
 - Phase 1 ✅ Math core (char. fn, Gil-Pelaez/Gauss-Legendre, BS+IV, calibration, round-trip).
@@ -16,19 +16,19 @@ Phases:
   Kruskal-Wallis/regime-conditional analysis, FastAPI/Redis/WebSocket API, Docker.
 - Phase 3 ✅ React dashboard: Vol Surface, Live Calibration (WS), Regime Dashboard, Model
   Comparison; skeletons, error boundaries, staleness indicator; dockerised behind nginx.
-- Phase 4 ✅ GitHub Actions CI (pytest + tsc + image build) and CD (Railway), Railway
+- Phase 4 ✅ GitHub Actions CI (Ruff + pytest + frontend checks + image builds) and CD (Railway), Railway
   config, production hardening (rate limit, gzip, request timeout, JSON logging, Sentry),
   diagnostic charts, final README. See DEPLOY.md.
 
 ## 2. Tech Stack
-- Python 3.14 locally (Docker image uses 3.12-slim). numpy, scipy, pandas.
+- Python 3.12 (local and Docker). numpy, scipy, pandas.
 - Models/data: hmmlearn (GaussianHMM), xgboost (needs OpenMP: `brew install libomp`;
   sklearn GradientBoosting fallback), scikit-learn.
 - Live data: yfinance (SPX/VIX), fredapi (risk-free); all with synthetic fallback.
 - API: FastAPI, uvicorn, pydantic v2, redis (in-memory fallback), websockets.
-- Frontend: React 19 + TypeScript (Vite), Tailwind v3, Plotly (`plotly.js-dist-min` via
-  react-plotly.js factory), @tanstack/react-query. Node 24 / npm 11.
-- pyyaml config, pytest. Virtualenv at `.venv` (`--system-site-packages`).
+- Frontend: React 19 + TypeScript (Vite), Tailwind v3, a trace-scoped Plotly build via
+  the react-plotly.js factory, @tanstack/react-query. Node 22+.
+- pyyaml config, pytest, Ruff. Use an isolated virtualenv at `.venv`.
 
 ## 3. Architecture / Codebase Map
 ```
@@ -56,7 +56,7 @@ frontend/src/lib/         theme, dataMode (live/synthetic context), kde, format,
 api/ratelimit.py          per-IP rate limiter (cache-backed) for /api/calibration/run
 api/logging_config.py     JSON log formatter + configure_logging()
 visualization/plots.py    diagnostic charts -> docs/assets/*.png (README figures)
-.github/workflows/        ci.yml (pytest + tsc + image build), deploy.yml (Railway, on green CI)
+.github/workflows/        ci.yml (lint + tests + builds), deploy.yml (Railway, on green CI)
 railway.json + frontend/railway.json   Railway config-as-code; DEPLOY.md = full guide
 docker/                   Dockerfile.api, Dockerfile.frontend (nginx), nginx.conf
 docker-compose.yml        frontend (:3000) + api (:8000) + redis (:6379)
@@ -64,6 +64,8 @@ configs/base.yaml         all hyperparameters (market, quadrature, calibration, 
                           hmm, residual_model, api)
 tests/test_synthetic.py   Phase 1 math-core suite
 tests/test_phase2_api.py  Phase 2: data/HMM/cache/endpoints (offline, deterministic)
+tests/test_phase4_hardening.py  middleware, rate-limit, logging, and compression contracts
+tests/test_regressions.py boundary validation, cache concurrency, proxy/mode/job regressions
 ```
 Data flow (API): request -> route -> service (cache.get_or_compute) ->
 fetchers.get_market_snapshot (live|stale-cache|synthetic) -> filter liquid ->
@@ -72,16 +74,17 @@ Data flow (frontend): React Query / WebSocket hook -> typed client (`/api`, `/ws
 to the backend) -> Plotly views; a global live/synthetic toggle keys every query.
 
 ## 4. Build / Run / Test
-- Activate env: `source .venv/bin/activate` (or use `.venv/bin/python`).
-- Tests: `.venv/bin/python -m pytest tests/ -q`
+- Bootstrap: `python3.12 -m venv .venv && source .venv/bin/activate && make bootstrap`
+- All local checks: `make check`; tests only: `make test`
 - Round-trip demo: `.venv/bin/python -m calibration.validators`
 - API offline: `HRL_OFFLINE=1 .venv/bin/uvicorn api.main:app --reload` -> http://localhost:8000/docs
-- Frontend dev: `cd frontend && npm install && npm run dev` -> http://localhost:5173
+- Frontend dev: `cd frontend && npm ci && npm run dev` -> http://localhost:5173
   (proxies /api + /ws to :8000). Build/typecheck: `npm run build`.
-- Full stack: `docker compose up --build` (frontend :3000, api :8000, redis :6379)
+- Full stack: `docker compose up --build` (frontend :3000, api :8000, Redis :6379;
+  synthetic by default, `HRL_OFFLINE=0` opts into live requests)
 - Regenerate README charts: `.venv/bin/python -m visualization.plots` -> docs/assets/
-- Deploy: GitHub Actions auto-deploys to Railway on green main (needs RAILWAY_TOKEN secret);
-  see DEPLOY.md. CI mirrors local: `pytest tests/ -q` + `cd frontend && npm run typecheck`.
+- Deploy: GitHub Actions deploys the exact green commit once `RAILWAY_TOKEN` is configured;
+  see DEPLOY.md. Keep native Railway autodeploy disabled when using the workflow.
 
 ## 5. Conventions & Gotchas
 - Char. function uses the **"little Heston trap"** g2 formulation — do NOT switch to g1.
@@ -97,21 +100,23 @@ to the backend) -> Plotly views; a global live/synthetic toggle keys every query
   to force synthetic.
 - HMM states are relabeled by realized vol (0=calm … K-1=crisis) for stable API labels.
 - `/api/regime/parameters` is heavy (dozens of calibrations) — uses `_light_config`
-  (coarser quadrature/grid/maxiter) and is background-computed + long-cached.
+  (coarser quadrature/grid/maxiter), starts only after an explicit dashboard action, and
+  is background-computed + long-cached.
 - The synthetic surface adds a small non-Heston wing bump (`smile_perturb`) so offline
   calibration error is realistic (~0.1%) and residual correction has structure to fix.
 - Heavy compute runs in `run_in_threadpool`; the WS runs calibrate in a worker thread and
   bridges per-iteration progress to the event loop via a thread-safe queue.
 - **Frontend:** `verbatimModuleSyntax` is on — use `import type` for type-only imports.
-  Plotly is imported only via `src/components/Plot.tsx` (factory bound to dist-min); never
-  import `react-plotly.js` directly (its default expects the full `plotly.js`). The bundle
-  is large (~1.5 MB gzip) because Plotly is monolithic — acceptable for this tool.
+  Plotly is imported only via `src/components/Plot.tsx`, which registers the scatter, bar,
+  heatmap, and surface traces used by the app; never import `react-plotly.js` directly or
+  the full Plotly distribution. The chart engine is lazy-loaded behind Suspense.
 - `/api/regime/parameters` returns 202 while computing; the frontend surfaces that as
   `AnalysisPendingError` and polls via React Query `refetchInterval` (rendered as "computing").
 - Three additive, non-breaking fields were added to `RegimeParametersResponse` for the
   dashboard: `param_samples`, `static_mae_by_regime`, `regime_mae_by_regime`.
-- **Hardening:** `/api/calibration/run` is rate-limited (1/min/IP, cache-backed, config
-  `api.rate_limit`); gzip via GZipMiddleware; live fetches have a `data.request_timeout`
+- **Hardening:** expensive calibration entry points are admission-controlled (cache-backed
+  per-IP HTTP limits plus a bounded WebSocket worker pool and Origin validation); gzip via
+  GZipMiddleware/nginx; live fetches have a `data.request_timeout`
   (thread + future timeout) that falls back to cache/synthetic; JSON request logging with
   X-Request-ID; Sentry inits only if `SENTRY_DSN` set; prod CORS from `CORS_ORIGINS` env.
 - **CI/CD:** ci.yml runs on push/PR; deploy.yml triggers via `workflow_run` only after CI

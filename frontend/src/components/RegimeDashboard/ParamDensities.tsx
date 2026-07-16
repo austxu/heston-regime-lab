@@ -1,6 +1,7 @@
 import Plot from '../Plot'
 import type { RegimeParametersResponse } from '../../api/types'
 import { PARAM_NAMES } from '../../api/types'
+import type { ParamName } from '../../api/types'
 import { PARAM_META } from '../../lib/params'
 import { gaussianKde, spanGrid } from '../../lib/kde'
 import { Badge } from '../ui/Badge'
@@ -24,11 +25,11 @@ function DensityPanel({
   labels,
   data,
 }: {
-  param: string
+  param: ParamName
   labels: string[]
   data: RegimeParametersResponse
 }) {
-  const meta = PARAM_META[param as keyof typeof PARAM_META]
+  const meta = PARAM_META[param]
   const perRegime = labels.map((l) => data.param_samples[l]?.[param] ?? [])
   const grid = spanGrid(perRegime)
   const test = data.kruskal_wallis[param]
@@ -62,6 +63,7 @@ function DensityPanel({
         )}
       </div>
       <Plot
+        ariaLabel={`${meta.name} distribution by market regime`}
         data={traces}
         layout={baseLayout({
           height: 140,

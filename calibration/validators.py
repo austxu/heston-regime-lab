@@ -62,12 +62,16 @@ def generate_synthetic_data(
     maturities = np.tile(mats, len(pct))
 
     scaffold = MarketData(
-        spot=spot, rate=rate, div_yield=div_yield,
-        strikes=strikes, maturities=maturities,
-        market_iv=np.zeros_like(strikes),  # filled below
+        spot=spot,
+        rate=rate,
+        div_yield=div_yield,
+        strikes=strikes,
+        maturities=maturities,
+        market_iv=np.full_like(strikes, 0.2),  # placeholder, replaced below
     )
     true_iv = heston_implied_vols(
-        true_params, scaffold,
+        true_params,
+        scaffold,
         n_nodes=int(quad.get("n_nodes", 128)),
         upper_limit=float(quad.get("upper_limit", 200.0)),
     )
@@ -87,7 +91,7 @@ class RoundTripResult:
 
     true_params: HestonParams
     calibration: CalibrationResult
-    relative_errors: dict          # name -> |recovered - true| / |true|
+    relative_errors: dict  # name -> |recovered - true| / |true|
     max_relative_error: float
     passed: bool
     tolerance: float

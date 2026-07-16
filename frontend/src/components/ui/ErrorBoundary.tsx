@@ -29,7 +29,7 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="card card-pad">
+        <div role="alert" className="card card-pad">
           <h3 className="text-sm font-semibold text-rose-300">Something went wrong</h3>
           <p className="mt-1 text-xs text-muted">
             {this.props.label ? `Failed to render ${this.props.label}.` : 'A rendering error occurred.'}
@@ -38,6 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
             {this.state.error.message}
           </pre>
           <button
+            type="button"
             onClick={this.reset}
             className="mt-3 rounded-lg border border-edge px-3 py-1.5 text-xs text-ink hover:bg-edge/40"
           >

@@ -46,13 +46,20 @@ def _light_config(config: dict) -> dict:
     quad = cfg.get("quadrature", {})
     cfg["quadrature"] = {"n_nodes": 64, "upper_limit": float(quad.get("upper_limit", 200.0))}
     cfg["calibration"] = {**cfg["calibration"], "maxiter": 120, "tol": 1e-8}
-    cfg["data"] = {**cfg["data"], "synthetic_fallback": {
-        **cfg["data"]["synthetic_fallback"], "n_strikes": 9, "n_maturities": 4}}
+    cfg["data"] = {
+        **cfg["data"],
+        "synthetic_fallback": {
+            **cfg["data"]["synthetic_fallback"],
+            "n_strikes": 9,
+            "n_maturities": 4,
+        },
+    }
     return cfg
 
 
 def _n_nodes(config: dict) -> int:
     return int(config.get("quadrature", {}).get("n_nodes", 128))
+
 
 # Regime-typical "ground-truth" Heston parameters: variance level and vol-of-vol rise,
 # and correlation gets more negative (steeper skew), from calm to crisis.
@@ -67,17 +74,20 @@ REGIME_TRUE_PARAMS = {
 class KruskalResult:
     """Per-parameter Kruskal-Wallis test across regimes."""
 
-    statistics: dict        # param -> H statistic
-    pvalues: dict           # param -> p-value
-    significant: dict       # param -> bool (p < alpha)
+    statistics: dict  # param -> H statistic
+    pvalues: dict  # param -> p-value
+    significant: dict  # param -> bool (p < alpha)
     alpha: float
 
     def as_dict(self) -> dict:
         return {
             "alpha": self.alpha,
             "by_param": {
-                p: {"H": float(self.statistics[p]), "p_value": float(self.pvalues[p]),
-                    "significant": bool(self.significant[p])}
+                p: {
+                    "H": float(self.statistics[p]),
+                    "p_value": float(self.pvalues[p]),
+                    "significant": bool(self.significant[p]),
+                }
                 for p in self.statistics
             },
         }
@@ -111,10 +121,7 @@ def kruskal_wallis_across_regimes(
     """Kruskal-Wallis H-test per Heston parameter across the regime groups."""
     stats, pvals, sig = {}, {}, {}
     for name in PARAM_NAMES:
-        groups = [
-            [getattr(p, name) for p in params_by_regime[r]]
-            for r in sorted(params_by_regime)
-        ]
+        groups = [[getattr(p, name) for p in params_by_regime[r]] for r in sorted(params_by_regime)]
         H, p = kruskal(*groups)
         stats[name], pvals[name], sig[name] = float(H), float(p), bool(p < alpha)
     return KruskalResult(stats, pvals, sig, alpha)
@@ -143,8 +150,9 @@ def static_vs_regime_conditional(config: dict, seed: int = 1) -> StaticVsRegimeR
     """
     cfg = _light_config(config)
     rng = np.random.default_rng(seed)
-    surfaces = {r: _surface_from_params(cfg, p, noise=0.003, rng=rng)
-                for r, p in REGIME_TRUE_PARAMS.items()}
+    surfaces = {
+        r: _surface_from_params(cfg, p, noise=0.003, rng=rng) for r, p in REGIME_TRUE_PARAMS.items()
+    }
 
     pooled = _pool_surfaces(list(surfaces.values()))
     static = calibrate(pooled, cfg).params
@@ -162,9 +170,12 @@ def static_vs_regime_conditional(config: dict, seed: int = 1) -> StaticVsRegimeR
     improvement = 100.0 * (static_overall - regime_overall) / static_overall
 
     return StaticVsRegimeResult(
-        static_params=static, regime_params=regime_params,
-        static_mae_by_regime=static_mae, regime_mae_by_regime=regime_mae,
-        static_mae_overall=float(static_overall), regime_mae_overall=float(regime_overall),
+        static_params=static,
+        regime_params=regime_params,
+        static_mae_by_regime=static_mae,
+        regime_mae_by_regime=regime_mae,
+        static_mae_overall=float(static_overall),
+        regime_mae_overall=float(regime_overall),
         improvement_pct=float(improvement),
     )
 
@@ -172,6 +183,7 @@ def static_vs_regime_conditional(config: dict, seed: int = 1) -> StaticVsRegimeR
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def _surface_from_params(
     config: dict, params: HestonParams, noise: float, rng: np.random.Generator
@@ -185,9 +197,12 @@ def _surface_from_params(
     chain = synthetic_options_chain(config, spot, rate, q, datetime.now(timezone.utc))
 
     data = MarketData(
-        spot=spot, rate=rate, div_yield=q,
-        strikes=chain["strike"].to_numpy(), maturities=chain["maturity"].to_numpy(),
-        market_iv=np.zeros(len(chain)),
+        spot=spot,
+        rate=rate,
+        div_yield=q,
+        strikes=chain["strike"].to_numpy(),
+        maturities=chain["maturity"].to_numpy(),
+        market_iv=np.full(len(chain), 0.2),
     )
     iv = heston_implied_vols(params, data, n_nodes=_n_nodes(config))
     iv = iv + rng.normal(0.0, noise, size=iv.shape)
@@ -199,7 +214,9 @@ def _surface_from_params(
     # otherwise create NaN-penalty cliffs that make L-BFGS-B thrash for many evaluations.
     forward = spot * np.exp((rate - q) * data.maturities)
     log_moneyness = np.log(data.strikes / forward)
-    ok = np.isfinite(data.market_iv) & (np.abs(log_moneyness) < 0.12) & (data.maturities >= 20 / 365)
+    ok = (
+        np.isfinite(data.market_iv) & (np.abs(log_moneyness) < 0.12) & (data.maturities >= 20 / 365)
+    )
     return MarketData(spot, rate, q, data.strikes[ok], data.maturities[ok], data.market_iv[ok])
 
 
@@ -207,7 +224,9 @@ def _pool_surfaces(surfaces: list[MarketData]) -> MarketData:
     """Concatenate per-regime surfaces into one pooled calibration target."""
     s0 = surfaces[0]
     return MarketData(
-        spot=s0.spot, rate=s0.rate, div_yield=s0.div_yield,
+        spot=s0.spot,
+        rate=s0.rate,
+        div_yield=s0.div_yield,
         strikes=np.concatenate([s.strikes for s in surfaces]),
         maturities=np.concatenate([s.maturities for s in surfaces]),
         market_iv=np.concatenate([s.market_iv for s in surfaces]),

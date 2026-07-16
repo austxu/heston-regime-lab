@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -69,8 +70,8 @@ class CacheResult:
 
     value: Any
     cached_at: datetime
-    hit: bool       # served from cache without recomputation
-    stale: bool     # producer failed; this is an older value
+    hit: bool  # served from cache without recomputation
+    stale: bool  # producer failed; this is an older value
 
 
 class Cache:
@@ -78,14 +79,18 @@ class Cache:
 
     def __init__(self, url: str | None = None, namespace: str = "hrl"):
         self.namespace = namespace
+        self._redis_configured = bool(url)
         self._mem: dict[str, str] = {}
+        self._lock = threading.RLock()
+        self._compute_locks: dict[str, threading.Lock] = {}
         self._redis = None
         if url:
             try:
                 import redis
 
-                client = redis.Redis.from_url(url, socket_connect_timeout=0.5,
-                                              socket_timeout=0.5, decode_responses=True)
+                client = redis.Redis.from_url(
+                    url, socket_connect_timeout=0.5, socket_timeout=0.5, decode_responses=True
+                )
                 client.ping()
                 self._redis = client
             except Exception:  # noqa: BLE001 — any redis problem -> in-memory
@@ -94,6 +99,11 @@ class Cache:
     @property
     def backend(self) -> str:
         return "redis" if self._redis is not None else "memory"
+
+    @property
+    def redis_configured(self) -> bool:
+        """Whether a Redis URL was supplied, independent of connection success."""
+        return self._redis_configured
 
     @property
     def healthy(self) -> bool:
@@ -115,7 +125,8 @@ class Cache:
                 return self._redis.get(nk)
             except Exception:  # noqa: BLE001 — connection dropped mid-flight
                 self._redis = None  # demote to memory for the rest of the process
-        return self._mem.get(nk)
+        with self._lock:
+            return self._mem.get(nk)
 
     def _set_raw(self, key: str, payload: str, ttl: int) -> None:
         nk = self._key(key)
@@ -125,15 +136,51 @@ class Cache:
                 return
             except Exception:  # noqa: BLE001
                 self._redis = None
-        self._mem[nk] = payload  # NOTE: in-memory TTL is best-effort (see get_entry)
+        with self._lock:
+            self._mem[nk] = payload  # TTL is evaluated by get_entry.
+
+    @staticmethod
+    def _payload(value: Any, ttl: int, cached_at: datetime | None = None) -> str:
+        timestamp = cached_at or datetime.now(timezone.utc)
+        return json.dumps(
+            {"value": value, "cached_at": timestamp.isoformat(), "ttl": int(ttl)},
+            default=_json_default,
+        )
 
     # -- structured get/set ------------------------------------------------ #
     def set(self, key: str, value: Any, ttl: int) -> None:
-        payload = json.dumps(
-            {"value": value, "cached_at": datetime.now(timezone.utc).isoformat(), "ttl": int(ttl)},
-            default=_json_default,
-        )
+        payload = self._payload(value, ttl)
         self._set_raw(key, payload, ttl)
+
+    def set_if_absent(self, key: str, value: Any, ttl: int) -> bool:
+        """Atomically set a fresh key and return whether this caller won.
+
+        Redis uses ``SET ... NX EX``; the memory backend uses a process lock and
+        treats expired entries as absent.  This supports race-free rate limits and
+        lightweight distributed job leases.
+        """
+        ttl = max(int(ttl), 1)
+        payload = self._payload(value, ttl)
+        nk = self._key(key)
+        if self._redis is not None:
+            try:
+                return bool(self._redis.set(nk, payload, ex=ttl, nx=True))
+            except Exception:  # noqa: BLE001
+                self._redis = None
+
+        with self._lock:
+            raw = self._mem.get(nk)
+            if raw is not None:
+                try:
+                    obj = json.loads(raw)
+                    cached_at = datetime.fromisoformat(obj["cached_at"])
+                    age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+                    if age < float(obj.get("ttl", 0)):
+                        return False
+                except Exception:  # noqa: BLE001 — corrupt entries are replaceable
+                    pass
+            self._mem[nk] = payload
+            return True
 
     def get_entry(self, key: str) -> tuple[Any, datetime, bool] | None:
         """Return ``(value, cached_at, fresh)`` for ``key`` or ``None`` if absent."""
@@ -168,19 +215,33 @@ class Cache:
             value, cached_at, _ = entry
             return CacheResult(value, cached_at, hit=True, stale=False)
 
-        try:
-            value = producer()
-            self.set(key, value, ttl)
-            return CacheResult(value, datetime.now(timezone.utc), hit=False, stale=False)
-        except Exception:  # noqa: BLE001 — producer failed (e.g. live fetch down)
-            if entry is not None:
+        # Single-flight expensive producers inside this process.  The second check
+        # after acquiring the keyed lock lets concurrent waiters reuse the winner.
+        with self._lock:
+            compute_lock = self._compute_locks.setdefault(key, threading.Lock())
+        with compute_lock:
+            entry = self.get_entry(key)
+            if entry is not None and entry[2]:
                 value, cached_at, _ = entry
-                return CacheResult(value, cached_at, hit=True, stale=True)
-            if fallback is not None:
-                value = fallback()
+                return CacheResult(value, cached_at, hit=True, stale=False)
+
+            try:
+                value = producer()
                 self.set(key, value, ttl)
-                return CacheResult(value, datetime.now(timezone.utc), hit=False, stale=False)
-            raise
+                stored = self.get_entry(key)
+                cached_at = stored[1] if stored is not None else datetime.now(timezone.utc)
+                return CacheResult(value, cached_at, hit=False, stale=False)
+            except Exception:  # noqa: BLE001 — producer failed (e.g. live fetch down)
+                if entry is not None:
+                    value, cached_at, _ = entry
+                    return CacheResult(value, cached_at, hit=True, stale=True)
+                if fallback is not None:
+                    value = fallback()
+                    self.set(key, value, ttl)
+                    stored = self.get_entry(key)
+                    cached_at = stored[1] if stored is not None else datetime.now(timezone.utc)
+                    return CacheResult(value, cached_at, hit=False, stale=False)
+                raise
 
     def invalidate(self, key: str) -> None:
         nk = self._key(key)
@@ -190,7 +251,95 @@ class Cache:
                 return
             except Exception:  # noqa: BLE001
                 self._redis = None
-        self._mem.pop(nk, None)
+        with self._lock:
+            self._mem.pop(nk, None)
+
+    def delete_if_value(self, key: str, expected_value: str) -> bool:
+        """Atomically delete ``key`` only when its wrapped value still owns it.
+
+        This compare-and-delete primitive prevents an expired background worker from
+        deleting a newer worker's lease after the key has been reacquired.
+        """
+        nk = self._key(key)
+        if self._redis is not None:
+            script = """
+                local raw = redis.call('GET', KEYS[1])
+                if not raw then return 0 end
+                local ok, decoded = pcall(cjson.decode, raw)
+                if ok and decoded['value'] == ARGV[1] then
+                    return redis.call('DEL', KEYS[1])
+                end
+                return 0
+            """
+            try:
+                return bool(self._redis.eval(script, 1, nk, expected_value))
+            except Exception:  # noqa: BLE001
+                self._redis = None
+
+        with self._lock:
+            raw = self._mem.get(nk)
+            if raw is None:
+                return False
+            try:
+                if json.loads(raw).get("value") != expected_value:
+                    return False
+            except Exception:  # noqa: BLE001
+                return False
+            self._mem.pop(nk, None)
+            return True
+
+    def refresh_if_value(self, key: str, expected_value: str, ttl: int) -> bool:
+        """Extend a live owner lease without allowing an expired owner to reclaim it.
+
+        Redis updates the wrapped timestamp and key expiry atomically.  The memory
+        backend applies the same freshness check under its process lock, so a delayed
+        heartbeat cannot revive a lease that has already expired or changed owners.
+        """
+        ttl = max(int(ttl), 1)
+        nk = self._key(key)
+        now = datetime.now(timezone.utc)
+        if self._redis is not None:
+            script = """
+                local raw = redis.call('GET', KEYS[1])
+                if not raw then return 0 end
+                local ok, decoded = pcall(cjson.decode, raw)
+                if not ok or decoded['value'] ~= ARGV[1] then return 0 end
+                decoded['cached_at'] = ARGV[2]
+                decoded['ttl'] = tonumber(ARGV[3])
+                redis.call('SET', KEYS[1], cjson.encode(decoded), 'EX', ARGV[3])
+                return 1
+            """
+            try:
+                return bool(
+                    self._redis.eval(
+                        script,
+                        1,
+                        nk,
+                        expected_value,
+                        now.isoformat(),
+                        ttl,
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                self._redis = None
+
+        with self._lock:
+            raw = self._mem.get(nk)
+            if raw is None:
+                return False
+            try:
+                obj = json.loads(raw)
+                cached_at = datetime.fromisoformat(obj["cached_at"])
+                age = (now - cached_at).total_seconds()
+                if age >= float(obj.get("ttl", 0)):
+                    self._mem.pop(nk, None)
+                    return False
+                if obj.get("value") != expected_value:
+                    return False
+            except Exception:  # noqa: BLE001
+                return False
+            self._mem[nk] = self._payload(expected_value, ttl, cached_at=now)
+            return True
 
     def clear(self) -> None:
         """Drop everything in this namespace (used in tests)."""
@@ -201,7 +350,9 @@ class Cache:
                 return
             except Exception:  # noqa: BLE001
                 self._redis = None
-        self._mem.clear()
+        with self._lock:
+            self._mem.clear()
+            self._compute_locks.clear()
 
 
 def build_cache(config: dict) -> Cache:

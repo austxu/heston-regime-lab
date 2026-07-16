@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Plot from '../Plot'
 import { Card } from '../ui/Card'
 import { ChartSkeleton } from '../ui/Skeleton'
@@ -22,13 +22,32 @@ export function VolSurfaceView() {
 
 function SurfaceContent({ data }: { data: SurfaceResponse }) {
   const { moneyness, maturities } = data
-  const [mRange, setMRange] = useState<[number, number]>([moneyness[0], moneyness[moneyness.length - 1]])
-  const [tRange, setTRange] = useState<[number, number]>([maturities[0], maturities[maturities.length - 1]])
+  const mMin = moneyness[0] ?? 0
+  const mMax = moneyness[moneyness.length - 1] ?? 1
+  const tMin = maturities[0] ?? 0
+  const tMax = maturities[maturities.length - 1] ?? 1
+  const mBounds = useMemo<[number, number]>(() => [mMin, mMax], [mMin, mMax])
+  const tBounds = useMemo<[number, number]>(() => [tMin, tMax], [tMin, tMax])
+  const [mRange, setMRange] = useState<[number, number]>(mBounds)
+  const [tRange, setTRange] = useState<[number, number]>(tBounds)
+
+  useEffect(() => setMRange((range) => clampRange(range, mBounds)), [mBounds])
+  useEffect(() => setTRange((range) => clampRange(range, tBounds)), [tBounds])
 
   const sliced = useMemo(() => sliceSurface(data, mRange, tRange), [data, mRange, tRange])
 
   // Shared z-axis range so the two surfaces are visually comparable.
   const zr = useMemo(() => zRange(sliced.market, sliced.heston), [sliced])
+
+  if (!moneyness.length || !maturities.length) {
+    return (
+      <Card title="Implied Volatility Surface">
+        <p className="py-12 text-center text-sm text-muted">
+          The API returned an empty volatility grid. Try refreshing the data source.
+        </p>
+      </Card>
+    )
+  }
 
   return (
     <>
@@ -40,8 +59,8 @@ function SurfaceContent({ data }: { data: SurfaceResponse }) {
         <div className="mb-4 flex flex-wrap gap-6">
           <RangeFilter
             label="Moneyness (K/S)"
-            min={moneyness[0]}
-            max={moneyness[moneyness.length - 1]}
+            min={mBounds[0]}
+            max={mBounds[1]}
             step={0.01}
             value={mRange}
             onChange={setMRange}
@@ -49,8 +68,8 @@ function SurfaceContent({ data }: { data: SurfaceResponse }) {
           />
           <RangeFilter
             label="Maturity (yrs)"
-            min={maturities[0]}
-            max={maturities[maturities.length - 1]}
+            min={tBounds[0]}
+            max={tBounds[1]}
             step={0.01}
             value={tRange}
             onChange={setTRange}
@@ -108,8 +127,9 @@ function SurfacePanel({
 }) {
   return (
     <div>
-      <div className="mb-1 text-xs font-medium text-muted">{title}</div>
+      <h3 className="mb-1 text-xs font-medium text-muted">{title}</h3>
       <Plot
+        ariaLabel={`${title} implied-volatility surface across moneyness and maturity`}
         data={[
           {
             type: 'surface',
@@ -155,6 +175,7 @@ function ErrorHeatmap({
   )
   return (
     <Plot
+      ariaLabel="Heatmap of market minus Heston implied-volatility calibration error"
       data={[
         {
           type: 'heatmap',
@@ -203,7 +224,8 @@ function sliceSurface(
 ): SlicedSurface {
   const mIdx = data.moneyness.map((m, i) => [m, i] as const).filter(([m]) => m >= mLo - 1e-9 && m <= mHi + 1e-9)
   const tIdx = data.maturities.map((t, i) => [t, i] as const).filter(([t]) => t >= tLo - 1e-9 && t <= tHi + 1e-9)
-  const pick = (grid: (number | null)[][]) => tIdx.map(([, ti]) => mIdx.map(([, mi]) => grid[ti][mi]))
+  const pick = (grid: (number | null)[][]) =>
+    tIdx.map(([, ti]) => mIdx.map(([, mi]) => grid[ti]?.[mi] ?? null))
   return {
     moneyness: mIdx.map(([m]) => m),
     maturities: tIdx.map(([t]) => t),
@@ -216,4 +238,15 @@ function zRange(a: (number | null)[][], b: (number | null)[][]): [number, number
   const vals = [...a.flat(), ...b.flat()].filter((v): v is number => v != null && Number.isFinite(v))
   if (!vals.length) return [0, 1]
   return [Math.min(...vals) * 0.98, Math.max(...vals) * 1.02]
+}
+
+function clampRange(
+  current: [number, number],
+  bounds: [number, number],
+): [number, number] {
+  const next: [number, number] =
+    current[1] < bounds[0] || current[0] > bounds[1]
+      ? bounds
+      : [Math.max(current[0], bounds[0]), Math.min(current[1], bounds[1])]
+  return next[0] === current[0] && next[1] === current[1] ? current : next
 }

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 import numpy as np
 import yaml
@@ -59,8 +59,11 @@ class CalibrationProgress:
 
 def load_config(path: str | Path) -> dict:
     """Load a YAML configuration file into a plain dict."""
-    with open(path, "r") as fh:
-        return yaml.safe_load(fh)
+    with Path(path).open("r", encoding="utf-8") as fh:
+        config = yaml.safe_load(fh)
+    if not isinstance(config, dict):
+        raise ValueError(f"configuration root must be a mapping, got {type(config).__name__}")
+    return config
 
 
 @dataclass
@@ -80,16 +83,47 @@ class MarketData:
     weights: np.ndarray | None = None
 
     def __post_init__(self) -> None:
-        self.strikes = np.asarray(self.strikes, dtype=float)
-        self.maturities = np.asarray(self.maturities, dtype=float)
-        self.market_iv = np.asarray(self.market_iv, dtype=float)
-        n = len(self.strikes)
-        if not (len(self.maturities) == len(self.market_iv) == n):
+        scalars = {"spot": self.spot, "rate": self.rate, "div_yield": self.div_yield}
+        for name, value in scalars.items():
+            if not np.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value!r}")
+        if self.spot <= 0.0:
+            raise ValueError(f"spot must be > 0, got {self.spot}")
+
+        self.strikes = np.array(self.strikes, dtype=float, copy=True)
+        self.maturities = np.array(self.maturities, dtype=float, copy=True)
+        self.market_iv = np.array(self.market_iv, dtype=float, copy=True)
+        arrays = {
+            "strikes": self.strikes,
+            "maturities": self.maturities,
+            "market_iv": self.market_iv,
+        }
+        for name, values in arrays.items():
+            if values.ndim != 1:
+                raise ValueError(f"{name} must be one-dimensional, got shape {values.shape}")
+
+        n = self.strikes.size
+        if not (self.maturities.size == self.market_iv.size == n):
             raise ValueError("strikes, maturities, market_iv must have equal length")
+        if n == 0:
+            raise ValueError("market data must contain at least one option quote")
+        if not np.all(np.isfinite(self.strikes)) or np.any(self.strikes <= 0.0):
+            raise ValueError("strikes must all be finite and > 0")
+        if not np.all(np.isfinite(self.maturities)) or np.any(self.maturities <= 0.0):
+            raise ValueError("maturities must all be finite and > 0")
+        if not np.all(np.isfinite(self.market_iv)) or np.any(self.market_iv <= 0.0):
+            raise ValueError("market_iv must all be finite and > 0")
+
         if self.weights is None:
-            self.weights = np.ones(n)
+            self.weights = np.ones(n, dtype=float)
         else:
-            self.weights = np.asarray(self.weights, dtype=float)
+            self.weights = np.array(self.weights, dtype=float, copy=True)
+            if self.weights.ndim != 1 or self.weights.size != n:
+                raise ValueError("weights must be one-dimensional and match the quote count")
+            if not np.all(np.isfinite(self.weights)) or np.any(self.weights < 0.0):
+                raise ValueError("weights must all be finite and >= 0")
+            if not np.any(self.weights > 0.0):
+                raise ValueError("at least one weight must be > 0")
 
     def __len__(self) -> int:
         return len(self.strikes)
@@ -101,7 +135,7 @@ class CalibrationResult:
 
     params: HestonParams
     success: bool
-    rmse_iv: float           # root-mean-square implied-vol error
+    rmse_iv: float  # root-mean-square implied-vol error
     mean_abs_iv_error: float  # mean absolute implied-vol error
     n_iter: int
     n_feval: int
@@ -158,16 +192,32 @@ def heston_implied_vols(
         strikes = data.strikes[mask]
         forward = data.spot * np.exp((data.rate - data.div_yield) * tau)
         call_prices = heston_price(
-            params, data.spot, strikes, data.rate, data.div_yield, tau,
-            "call", n_nodes=n_nodes, upper_limit=upper_limit,
+            params,
+            data.spot,
+            strikes,
+            data.rate,
+            data.div_yield,
+            tau,
+            "call",
+            n_nodes=n_nodes,
+            upper_limit=upper_limit,
         )
-        ivs = np.array([
-            _iv_from_heston_call(
-                float(cp), data.spot, float(k), data.rate, data.div_yield,
-                float(tau), forward, iv_bounds, iv_xtol,
-            )
-            for cp, k in zip(np.atleast_1d(call_prices), strikes)
-        ])
+        ivs = np.array(
+            [
+                _iv_from_heston_call(
+                    float(cp),
+                    data.spot,
+                    float(k),
+                    data.rate,
+                    data.div_yield,
+                    float(tau),
+                    forward,
+                    iv_bounds,
+                    iv_xtol,
+                )
+                for cp, k in zip(np.atleast_1d(call_prices), strikes)
+            ]
+        )
         model_iv[mask] = ivs
     return model_iv
 
@@ -211,6 +261,8 @@ def calibrate(
     CalibrationResult
         Fitted parameters plus convergence diagnostics and IV error metrics.
     """
+    if not isinstance(config, Mapping):
+        raise TypeError("config must be a mapping")
     cal = config["calibration"]
     quad = config.get("quadrature", {})
     iv_cfg = config.get("implied_vol", {})
@@ -220,8 +272,13 @@ def calibrate(
     iv_xtol = float(iv_cfg.get("xtol", 1e-12))
     feller_w = float(cal.get("feller_penalty", 0.0))
 
-    lo = np.array([cal["bounds"][name][0] for name in PARAM_NAMES])
-    hi = np.array([cal["bounds"][name][1] for name in PARAM_NAMES])
+    lo = np.array([cal["bounds"][name][0] for name in PARAM_NAMES], dtype=float)
+    hi = np.array([cal["bounds"][name][1] for name in PARAM_NAMES], dtype=float)
+    if not np.all(np.isfinite(lo)) or not np.all(np.isfinite(hi)) or np.any(lo >= hi):
+        raise ValueError("every calibration bound must be finite with lower < upper")
+    # Every point in the optimiser box must be constructible as HestonParams.
+    if np.any(lo[[0, 1, 2, 4]] <= 0.0) or lo[3] <= -1.0 or hi[3] >= 1.0:
+        raise ValueError("Heston bounds require positive kappa/theta/sigma/v0 and -1 < rho < 1")
 
     if initial_guess is None:
         ig = cal["initial_guess"]
@@ -232,13 +289,23 @@ def calibrate(
 
     w = data.weights
     counter = {"feval": 0}
+    last_evaluation: dict[str, np.ndarray | float | None] = {"z": None, "loss": None}
 
-    def objective(z: np.ndarray) -> float:
-        counter["feval"] += 1
+    def objective(z: np.ndarray, *, count: bool = True) -> float:
+        z = np.asarray(z, dtype=float)
+        if count:
+            counter["feval"] += 1
+        cached_z = last_evaluation["z"]
+        if isinstance(cached_z, np.ndarray) and np.array_equal(z, cached_z):
+            return float(last_evaluation["loss"])
         params = HestonParams.from_array(_denormalise(z, lo, hi))
         model_iv = heston_implied_vols(
-            params, data, n_nodes=n_nodes, upper_limit=upper_limit,
-            iv_bounds=iv_bounds, iv_xtol=iv_xtol,
+            params,
+            data,
+            n_nodes=n_nodes,
+            upper_limit=upper_limit,
+            iv_bounds=iv_bounds,
+            iv_xtol=iv_xtol,
         )
         resid = model_iv - data.market_iv
         # A non-invertible quote (nan) is penalised heavily rather than dropped.
@@ -247,6 +314,8 @@ def calibrate(
         if feller_w > 0.0:  # soft penalty on Feller violation 2*kappa*theta > sigma^2
             viol = max(0.0, params.sigma**2 - 2.0 * params.kappa * params.theta)
             loss += feller_w * viol**2
+        last_evaluation["z"] = z.copy()
+        last_evaluation["loss"] = loss
         return loss
 
     iter_counter = {"it": 0}
@@ -255,35 +324,50 @@ def calibrate(
         # scipy passes the current normalised parameter vector each accepted iteration.
         iter_counter["it"] += 1
         p = HestonParams.from_array(_denormalise(np.asarray(zk), lo, hi))
-        callback(CalibrationProgress(
-            iteration=iter_counter["it"],
-            loss=objective(np.asarray(zk)),
-            params={name: getattr(p, name) for name in PARAM_NAMES},
-        ))
+        callback(
+            CalibrationProgress(
+                iteration=iter_counter["it"],
+                loss=objective(np.asarray(zk), count=False),
+                params={name: getattr(p, name) for name in PARAM_NAMES},
+            )
+        )
 
     result = minimize(
         objective,
         z0,
         method="L-BFGS-B",
         bounds=[(0.0, 1.0)] * len(PARAM_NAMES),
-        options={"maxiter": int(cal.get("maxiter", 500)), "ftol": float(cal.get("tol", 1e-10)),
-                 "gtol": 1e-12},
+        options={
+            "maxiter": int(cal.get("maxiter", 500)),
+            "ftol": float(cal.get("tol", 1e-10)),
+            "gtol": 1e-12,
+        },
         callback=_on_step if callback is not None else None,
     )
 
     params = HestonParams.from_array(_denormalise(result.x, lo, hi))
     model_iv = heston_implied_vols(
-        params, data, n_nodes=n_nodes, upper_limit=upper_limit,
-        iv_bounds=iv_bounds, iv_xtol=iv_xtol,
+        params,
+        data,
+        n_nodes=n_nodes,
+        upper_limit=upper_limit,
+        iv_bounds=iv_bounds,
+        iv_xtol=iv_xtol,
     )
     err = model_iv - data.market_iv
+    finite = np.isfinite(err)
+    metric_err = np.where(finite, err, 10.0)
+    success = bool(result.success) and bool(np.all(finite))
+    message = str(result.message)
+    if not np.all(finite):
+        message = f"{message}; {int((~finite).sum())} final model IVs were not invertible"
     return CalibrationResult(
         params=params,
-        success=bool(result.success),
-        rmse_iv=float(np.sqrt(np.nanmean(err**2))),
-        mean_abs_iv_error=float(np.nanmean(np.abs(err))),
+        success=success,
+        rmse_iv=float(np.sqrt(np.mean(metric_err**2))),
+        mean_abs_iv_error=float(np.mean(np.abs(metric_err))),
         n_iter=int(result.nit),
         n_feval=counter["feval"],
-        message=str(result.message),
+        message=message,
         model_iv=model_iv,
     )

@@ -49,21 +49,35 @@ REGIME_COLORS = ["#34d399", "#fbbf24", "#f43f5e"]
 
 
 def _style() -> None:
-    plt.rcParams.update({
-        "figure.facecolor": BG, "axes.facecolor": PANEL, "savefig.facecolor": BG,
-        "text.color": INK, "axes.labelcolor": INK, "axes.edgecolor": "#1e2940",
-        "xtick.color": MUTED, "ytick.color": MUTED, "grid.color": "#1e2940",
-        "axes.titlecolor": INK, "font.size": 10, "axes.grid": True,
-        "legend.facecolor": PANEL, "legend.edgecolor": "#1e2940",
-    })
+    plt.rcParams.update(
+        {
+            "figure.facecolor": BG,
+            "axes.facecolor": PANEL,
+            "savefig.facecolor": BG,
+            "text.color": INK,
+            "axes.labelcolor": INK,
+            "axes.edgecolor": "#1e2940",
+            "xtick.color": MUTED,
+            "ytick.color": MUTED,
+            "grid.color": "#1e2940",
+            "axes.titlecolor": INK,
+            "font.size": 10,
+            "axes.grid": True,
+            "legend.facecolor": PANEL,
+            "legend.edgecolor": "#1e2940",
+        }
+    )
 
 
 def _liquid_market_data(config: dict) -> MarketData:
     snap = F.get_market_snapshot(config, prefer_live=False)
     liquid, _ = F.filter_liquid_options(snap, config)
     return MarketData(
-        spot=snap.spot, rate=snap.rate, div_yield=snap.div_yield,
-        strikes=liquid["strike"].to_numpy(), maturities=liquid["maturity"].to_numpy(),
+        spot=snap.spot,
+        rate=snap.rate,
+        div_yield=snap.div_yield,
+        strikes=liquid["strike"].to_numpy(),
+        maturities=liquid["maturity"].to_numpy(),
         market_iv=liquid["market_iv"].to_numpy(),
     )
 
@@ -107,12 +121,24 @@ def plot_regime_overlay(config: dict, path: Path) -> None:
     start = 0
     for i in range(1, len(path_states) + 1):
         if i == len(path_states) or path_states[i] != path_states[start]:
-            ax.axvspan(dates[start], dates[min(i, len(dates) - 1)],
-                       color=REGIME_COLORS[path_states[start]], alpha=0.18, zorder=1)
+            ax.axvspan(
+                dates[start],
+                dates[min(i, len(dates) - 1)],
+                color=REGIME_COLORS[path_states[start]],
+                alpha=0.18,
+                zorder=1,
+            )
             start = i
     labels = config["hmm"]["state_labels"]
-    handles = [plt.Rectangle((0, 0), 1, 1, color=REGIME_COLORS[k], alpha=0.5) for k in range(len(labels))]
-    ax.legend(handles, [l.replace("_", " ").title() for l in labels], fontsize=8, loc="upper left")
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=REGIME_COLORS[k], alpha=0.5) for k in range(len(labels))
+    ]
+    ax.legend(
+        handles,
+        [label.replace("_", " ").title() for label in labels],
+        fontsize=8,
+        loc="upper left",
+    )
     ax.set_ylabel("SPX (synthetic)")
     ax.set_title("HMM-detected volatility regimes over SPX")
     fig.tight_layout()
@@ -131,7 +157,9 @@ def plot_model_comparison(config: dict, path: Path) -> None:
     fig, ax = plt.subplots(figsize=(8, 4.2))
     ax.bar(x - w, [b["bs"] for b in cmp.by_moneyness], w, label="Black-Scholes", color=BS)
     ax.bar(x, [b["heston"] for b in cmp.by_moneyness], w, label="Heston", color=MODEL)
-    ax.bar(x + w, [b["corrected"] for b in cmp.by_moneyness], w, label="Heston + residual", color=CORR)
+    ax.bar(
+        x + w, [b["corrected"] for b in cmp.by_moneyness], w, label="Heston + residual", color=CORR
+    )
     ax.set_xticks(x)
     ax.set_xticklabels([f"{c:.2f}" for c in centers])
     ax.set_xlabel("Moneyness K/S")
@@ -150,8 +178,14 @@ def plot_calibration_convergence(config: dict, path: Path) -> None:
     calibrate(data, config, callback=steps.append)
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.semilogy([s.iteration for s in steps], [max(s.loss, 1e-16) for s in steps],
-                color=ACCENT, marker="o", ms=3, lw=1.5)
+    ax.semilogy(
+        [s.iteration for s in steps],
+        [max(s.loss, 1e-16) for s in steps],
+        color=ACCENT,
+        marker="o",
+        ms=3,
+        lw=1.5,
+    )
     ax.set_xlabel("L-BFGS-B iteration")
     ax.set_ylabel("Objective (Σ IV residual²)")
     ax.set_title("Calibration convergence")

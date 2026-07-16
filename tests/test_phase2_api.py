@@ -89,12 +89,17 @@ def test_heston_beats_flat_bs():
 
     snap = F.get_market_snapshot(CONFIG, prefer_live=False)
     liquid, _ = F.filter_liquid_options(snap, CONFIG)
-    data = MarketData(snap.spot, snap.rate, snap.div_yield,
-                      liquid["strike"].to_numpy(), liquid["maturity"].to_numpy(),
-                      liquid["market_iv"].to_numpy())
+    data = MarketData(
+        snap.spot,
+        snap.rate,
+        snap.div_yield,
+        liquid["strike"].to_numpy(),
+        liquid["maturity"].to_numpy(),
+        liquid["market_iv"].to_numpy(),
+    )
     res = calibrate(data, CONFIG)
     cmp = compare_pricing(data, res.params, CONFIG)
-    assert cmp.mae_heston < cmp.mae_bs           # Heston fits the smile
+    assert cmp.mae_heston < cmp.mae_bs  # Heston fits the smile
     assert cmp.mae_corrected <= cmp.mae_heston * 1.05  # residual correction doesn't hurt
 
 
@@ -106,9 +111,14 @@ def test_calibration_callback_fires_and_is_noop_when_absent():
 
     snap = F.get_market_snapshot(CONFIG, prefer_live=False)
     liquid, _ = F.filter_liquid_options(snap, CONFIG)
-    data = MarketData(snap.spot, snap.rate, snap.div_yield,
-                      liquid["strike"].to_numpy(), liquid["maturity"].to_numpy(),
-                      liquid["market_iv"].to_numpy())
+    data = MarketData(
+        snap.spot,
+        snap.rate,
+        snap.div_yield,
+        liquid["strike"].to_numpy(),
+        liquid["maturity"].to_numpy(),
+        liquid["market_iv"].to_numpy(),
+    )
     progress = []
     res_cb = calibrate(data, CONFIG, callback=progress.append)
     res_plain = calibrate(data, CONFIG)
@@ -128,6 +138,7 @@ def test_cache_get_or_compute_freshness_and_stale():
     assert cache.backend == "memory"
 
     calls = {"n": 0}
+
     def producer():
         calls["n"] += 1
         return {"v": calls["n"]}
@@ -139,8 +150,10 @@ def test_cache_get_or_compute_freshness_and_stale():
 
     # Expired entry + failing producer -> serve stale.
     cache.set("k2", {"v": 10}, ttl=0)
+
     def boom():
         raise RuntimeError("live source down")
+
     r3 = cache.get_or_compute("k2", 0, boom)
     assert r3.stale and r3.value == {"v": 10}
 
@@ -179,6 +192,9 @@ def test_health(client):
     body = r.json()
     assert body["status"] == "ok"
     assert body["cache_backend"] in ("memory", "redis")
+    assert body["cache_healthy"] is True
+    if body["cache_backend"] == "memory":
+        assert body["redis_healthy"] is False
 
 
 def test_calibration_endpoint(client):
@@ -186,7 +202,7 @@ def test_calibration_endpoint(client):
     assert r.status_code == 200
     body = r.json()
     assert set(body["params"]) >= {"kappa", "theta", "sigma", "rho", "v0"}
-    assert body["mean_iv_error"] < 0.03      # target: under 3% vol error
+    assert body["mean_iv_error"] < 0.03  # target: under 3% vol error
     assert body["n_options"] > 0
     assert body["provenance"]["source"] == "synthetic"
 
@@ -214,6 +230,15 @@ def test_regime_history_endpoint(client):
     body = r.json()
     assert len(body["points"]) > 0
     assert {"date", "price", "regime", "label"} == set(body["points"][0])
+
+
+@pytest.mark.parametrize("downsample", [0, -1, 5001])
+def test_regime_history_rejects_invalid_downsample(client, downsample):
+    r = client.get(
+        "/api/regime/history",
+        params={"live": "false", "downsample": str(downsample)},
+    )
+    assert r.status_code == 422
 
 
 def test_comparison_endpoint(client):

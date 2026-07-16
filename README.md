@@ -4,17 +4,16 @@
 [![Deploy](https://github.com/austxu/heston-regime-lab/actions/workflows/deploy.yml/badge.svg)](https://github.com/austxu/heston-regime-lab/actions/workflows/deploy.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776ab?logo=python&logoColor=white)
 ![React](https://img.shields.io/badge/react-19-149eca?logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-71%20passing-34d399)
 
 Stochastic-volatility research lab: calibrate the **Heston** model to SPX options, detect
 market **regimes** with a hidden Markov model, and study how Heston parameters and
 calibration error change across regimes — served as a live API with a React dashboard.
 
-**🔗 Live demo:** _set after the first Railway deploy_ — see [DEPLOY.md](DEPLOY.md) · **API docs:** `/docs` on the deployed API
+**Deployment:** Railway-ready, but no public demo URL is committed. See [DEPLOY.md](DEPLOY.md);
+interactive API docs are available at `/docs` whenever the API is running.
 
-> **Status: Phase 4 / 4 — deployed.** Math core, FastAPI backend, and React dashboard are
-> complete; CI/CD (GitHub Actions → Railway), production hardening (rate limiting, gzip,
-> JSON logging, Sentry), and deployment config are in place.
+> **Status: Phase 4 / 4 — deployment-ready.** The math core, FastAPI backend, React
+> dashboard, CI/CD, production hardening, and Railway configuration are in place.
 
 ## Architecture
 
@@ -28,7 +27,7 @@ flowchart LR
   fred --> API
   subgraph backend["FastAPI backend"]
     API["REST + WebSocket<br/>calibration · surface · regime · comparison"]
-    REDIS[("Redis cache<br/>session-keyed, persistent")]
+    REDIS[("Redis cache<br/>session-keyed, shared")]
     API <--> REDIS
   end
   API -. "live fetch fails" .-> SYN["Deterministic<br/>synthetic fallback"]
@@ -49,28 +48,47 @@ fallback at the data layer so every component runs offline.
 3. **Frontend dashboard ✅:** React + TypeScript + Tailwind + Plotly + React Query dashboard
    with four views (Vol Surface, Live Calibration, Regime Dashboard, Model Comparison), a
    WebSocket convergence chart, skeletons, error boundaries, and a staleness indicator.
-4. **Deploy + CI/CD + hardening ✅ (this phase):** GitHub Actions CI (pytest + `tsc` +
-   image builds) and CD (auto-deploy to Railway on green main), Railway config for
+4. **Deploy + CI/CD + hardening ✅:** GitHub Actions CI (Ruff + pytest + frontend lint /
+   typecheck + image builds) and CD (deploy to Railway on green main when configured), Railway config for
    API/Redis/frontend, and production hardening — calibration rate limiting, gzip, request
    timeouts with cache fallback, structured JSON logging, and Sentry.
 
+## Prerequisites
+
+- Python 3.12, Node.js 22, and npm
+- `libomp` on macOS (`brew install libomp`) so XGBoost can load
+- Docker with Compose v2 only if you want to run the containerized stack
+
 ## Quickstart
+
 ```bash
-python -m venv --system-site-packages .venv && source .venv/bin/activate
-pip install -r requirements.txt
-# macOS: xgboost needs the OpenMP runtime ->  brew install libomp
-pytest tests/ -q                      # full test suite (math core + API, offline)
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+
+# Deterministic checks: tests never need market-data or Redis access.
+HRL_OFFLINE=1 REDIS_URL= python -m pytest -q
+ruff check .
 python -m calibration.validators      # round-trip calibration demo
 
 # Run the API (offline / synthetic data, no network needed):
-HRL_OFFLINE=1 uvicorn api.main:app --reload   # then open http://localhost:8000/docs
+HRL_OFFLINE=1 uvicorn api.main:app --reload
+# Open http://localhost:8000/docs and http://localhost:8000/health
 
-# Or the full stack (frontend + api + redis):
-docker compose up --build       # dashboard :3000, api :8000, redis :6379
+# Or run the full stack. Compose defaults to deterministic synthetic data:
+docker compose up --build       # dashboard :3000, api :8000, Redis :6379
+# Opt into live requests with: HRL_OFFLINE=0 docker compose up --build
+# Optional local settings can be copied from .env.example to .env.
 
 # Frontend dev server (proxies /api + /ws to the backend on :8000):
-cd frontend && npm install && npm run dev      # then open http://localhost:5173
+cd frontend && npm ci && npm run dev            # then open http://localhost:5173
 ```
+
+`requirements.txt` contains API/model runtime libraries; `requirements-dev.txt` adds the
+test client, chart-generation dependency, pytest, and the pinned linter. `make bootstrap`
+installs both Python and frontend dependencies, and `make check` mirrors the main local CI
+checks, including both regression suites.
 
 ## Layout
 ```
@@ -90,9 +108,9 @@ visualization/plots.py      diagnostic charts -> docs/assets/ (README figures)
 docker/                     Dockerfile.api, Dockerfile.frontend, nginx.conf
 docker-compose.yml          frontend + api + redis stack
 railway.json, frontend/railway.json   Railway config-as-code; see DEPLOY.md
-.github/workflows/          ci.yml (pytest + tsc + image build), deploy.yml (Railway)
+.github/workflows/          ci.yml (lint + tests + builds), deploy.yml (Railway)
 configs/base.yaml           all hyperparameters
-tests/                      pytest suites (synthetic, phase2 API, phase4 hardening)
+tests/                      deterministic pytest unit, contract, API, and hardening suites
 ```
 
 The mathematical derivations (characteristic function, Gil-Pelaez inversion, HMM) are in
@@ -100,7 +118,7 @@ The mathematical derivations (characteristic function, Gil-Pelaez inversion, HMM
 
 ## API (Phase 2)
 
-A FastAPI backend serves the research live. Every response carries a `provenance` block
+A FastAPI backend serves the research live. Market-derived responses carry a `provenance` block
 (`source: live|synthetic`, `as_of`, `stale`, `cache_backend`). Results are cached in Redis
 (falling back to an in-process cache) with per-session keys that roll over after market
 close, and a serve-stale-on-error policy: if a live yfinance/FRED pull fails, the last good
@@ -119,7 +137,8 @@ deterministic synthetic data.
 | GET | `/api/comparison` | Flat-BS vs Heston vs Heston+residual error, by strike/maturity |
 | WS | `/ws/calibration` | Live L-BFGS-B convergence stream (`iteration`, `loss`, `params`) |
 
-Add `?live=false` to any endpoint (or set `HRL_OFFLINE=1`) to force the synthetic path.
+Add `?live=false` to market-data endpoints (or set `HRL_OFFLINE=1`) to select the synthetic
+path. An explicit query parameter takes precedence over the environment default.
 Interactive docs at `/docs`; set `FRED_API_KEY` to enable the live risk-free rate.
 
 ## Dashboard (Phase 3)
@@ -135,8 +154,8 @@ every panel; each panel has skeleton loading, an error boundary, and a staleness
   tooltips) and a colour-coded mean-vol-error badge. The WebSocket hook reconnects with
   exponential backoff.
 - **Regime Dashboard** — current-regime badge with posterior bars, 20y SPX history with
-  regime background bands, per-regime parameter density plots (Kruskal-Wallis), and a
-  static-vs-regime-conditional error chart.
+  regime background bands, plus an on-demand deeper study with per-regime parameter
+  densities (Kruskal-Wallis) and a static-vs-regime-conditional error chart.
 - **Model Comparison** — Black-Scholes vs Heston vs Heston+residual error table broken down
   by moneyness and maturity buckets, with an auto-generated key-finding callout.
 
@@ -171,11 +190,12 @@ magnitude in a few dozen iterations (streamed live over `/ws/calibration`).
 
 ## Production & deployment
 
-The API is hardened for production: per-IP **rate limiting** on the calibration endpoint
+The API is hardened for production: per-client **rate limiting** on the calibration endpoint
 (1/min), **gzip** compression, **request timeouts** on live data with cache/synthetic
 fallback, **structured JSON logging** with request IDs, and optional **Sentry** error
-tracking (enabled by `SENTRY_DSN`). CI/CD runs on GitHub Actions and deploys to **Railway**
-(API + managed Redis with a persistent volume + frontend behind nginx). See
+tracking (enabled by `SENTRY_DSN`). GitHub Actions can deploy to **Railway** after a green
+default-branch build once its project token is configured (API + managed Redis + frontend
+behind nginx). See
 [DEPLOY.md](DEPLOY.md) for the full setup.
 
 ## Mathematical background
@@ -323,4 +343,3 @@ hmmlearn assigns states arbitrarily, so we relabel them by mean realized volatil
 calibrated Heston parameters differ across regimes (Kruskal–Wallis, $p<0.01$) and compare
 static vs regime-conditional calibration. Implemented in `models/hmm.py` and
 `analysis/regime_analysis.py`, served via `/api/regime/*`.
-

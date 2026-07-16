@@ -29,6 +29,8 @@ TRADING_DAYS = 252
 
 def realized_vol(log_returns: pd.Series, window: int) -> pd.Series:
     """Annualised rolling realized volatility: ``std(returns, window) * sqrt(252)``."""
+    if isinstance(window, bool) or int(window) != window or window < 2:
+        raise ValueError(f"window must be an integer >= 2, got {window!r}")
     return log_returns.rolling(window).std() * np.sqrt(TRADING_DAYS)
 
 
@@ -55,7 +57,22 @@ def engineer_features(
         Columns: ``ret, rv_5d, rv_21d, rv_63d, vix9d, vix, vix3m, vix_slope,
         ret_skew_21d, ret_skew_63d, volume_ratio``.  Warmup rows (NaN) are dropped.
     """
+    if "close" not in prices.columns:
+        raise KeyError("prices frame must contain a 'close' column")
+    required_vix = {"vix9d", "vix", "vix3m"}
+    missing_vix = sorted(required_vix.difference(vix.columns))
+    if missing_vix:
+        raise KeyError(f"VIX frame is missing required columns: {missing_vix}")
+    if prices.index.has_duplicates or vix.index.has_duplicates:
+        raise ValueError("price and VIX indexes must not contain duplicate dates")
+
+    prices = prices.sort_index()
+    vix = vix.sort_index()
     close = prices["close"].astype(float)
+    if close.empty:
+        raise ValueError("prices frame must contain at least one observation")
+    if not np.all(np.isfinite(close)) or (close <= 0.0).any():
+        raise ValueError("close prices must all be finite and > 0")
     log_ret = np.log(close).diff()
 
     feats = pd.DataFrame(index=close.index)
@@ -65,10 +82,15 @@ def engineer_features(
     feats["rv_63d"] = realized_vol(log_ret, 63)
 
     # VIX term structure, aligned to the price index (forward-fill small gaps).
-    vix_aligned = vix.reindex(close.index).ffill()
-    feats["vix9d"] = vix_aligned.get("vix9d")
-    feats["vix"] = vix_aligned.get("vix")
-    feats["vix3m"] = vix_aligned.get("vix3m")
+    fill_limit = int((config or {}).get("data", {}).get("vix_forward_fill_days", 5))
+    if fill_limit < 0:
+        raise ValueError("data.vix_forward_fill_days must be >= 0")
+    vix_aligned = vix.reindex(close.index)
+    if fill_limit:
+        vix_aligned = vix_aligned.ffill(limit=fill_limit)
+    feats["vix9d"] = vix_aligned["vix9d"]
+    feats["vix"] = vix_aligned["vix"]
+    feats["vix3m"] = vix_aligned["vix3m"]
     feats["vix_slope"] = feats["vix3m"] - feats["vix"]
 
     # Rolling return skewness (crash asymmetry).
@@ -82,7 +104,10 @@ def engineer_features(
     else:
         feats["volume_ratio"] = 1.0
 
-    return feats.dropna()
+    result = feats.replace([np.inf, -np.inf], np.nan).dropna()
+    if result.empty:
+        raise ValueError("feature engineering produced no complete finite observations")
+    return result
 
 
 def feature_matrix(features: pd.DataFrame, columns: list[str]) -> np.ndarray:
@@ -94,4 +119,11 @@ def feature_matrix(features: pd.DataFrame, columns: list[str]) -> np.ndarray:
     missing = [c for c in columns if c not in features.columns]
     if missing:
         raise KeyError(f"feature columns missing from frame: {missing}")
-    return features[columns].to_numpy(dtype=float)
+    if not columns:
+        raise ValueError("at least one feature column is required")
+    matrix = features[columns].to_numpy(dtype=float)
+    if matrix.shape[0] == 0:
+        raise ValueError("feature frame contains no observations")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("feature matrix must contain only finite values")
+    return matrix

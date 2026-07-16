@@ -1,24 +1,23 @@
-# ---- Phase 1: mathematical core (required now) ----
-numpy>=1.24
-scipy>=1.10
-pyyaml>=6.0
-pytest>=7.0
+# Runtime and research dependencies.  Lower bounds reflect Python 3.12 support; upper
+# bounds prevent an unreviewed future major release from silently changing production.
+# Developer/test tools live in requirements-dev.txt.
 
-# ---- Phase 2: data / ML / regimes ----
-pandas>=2.0
-yfinance>=0.2.40
-fredapi>=0.5
-xgboost>=2.0          # needs an OpenMP runtime (`brew install libomp` on macOS)
-hmmlearn>=0.3
-matplotlib>=3.7
-seaborn>=0.13
-scikit-learn>=1.3     # GradientBoosting fallback if xgboost can't load
+# ---- Mathematical core ----
+numpy>=1.26,<3
+scipy>=1.11,<2
+pyyaml>=6.0,<7
 
-# ---- Phase 2: API service (FastAPI + Redis + WebSocket) ----
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pydantic>=2.6
-pydantic-settings>=2.2
-redis>=5.0            # API degrades to an in-process cache if redis is unreachable
-httpx>=0.27           # used by fastapi TestClient in tests
-sentry-sdk>=2.0       # optional error tracking (no-op unless SENTRY_DSN is set)
+# ---- Data / ML / regimes ----
+pandas>=2.1,<4
+yfinance>=0.2.40,<2
+fredapi>=0.5,<1
+xgboost>=2.0,<4       # needs OpenMP (`brew install libomp` on macOS)
+hmmlearn>=0.3,<1
+scikit-learn>=1.4,<2  # GradientBoosting fallback if xgboost cannot load
+
+# ---- API service (FastAPI + Redis + WebSocket) ----
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+pydantic>=2.6,<3
+redis>=5.0,<9          # API degrades to an in-process cache if Redis is unreachable
+sentry-sdk>=2.0,<3     # no-op unless SENTRY_DSN is set

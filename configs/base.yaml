@@ -69,9 +69,12 @@ data:
     vix: "^VIX"
     vix3m: "^VIX3M"
   history_years: 20            # daily SPX/VIX history depth for features + HMM
+  vix_forward_fill_days: 5     # tolerate short exchange/data gaps, not stale VIX series
   fred_rate_series: "DGS3MO"   # 3-month T-bill, used as the risk-free proxy
   fred_api_key_env: "FRED_API_KEY"   # env var holding the FRED key (optional)
   request_timeout: 8.0         # seconds; live fetch abandoned past this -> cache/synthetic
+  max_option_expiries: 4       # representative expiries fetched within request latency budget
+  option_expiry_target_days: [30, 90, 180, 365]
   # Liquidity filtering of the raw options chain.
   liquidity:
     min_delta: 0.05            # drop deep-OTM: |delta| < this
@@ -99,7 +102,8 @@ hmm:
 
 # XGBoost residual-correction model on Heston pricing errors.
 residual_model:
-  feature_cols: ["log_moneyness", "maturity", "market_iv"]
+  # Prediction-time features only; market_iv is the target and would leak outcomes.
+  feature_cols: ["log_moneyness", "maturity", "heston_iv"]
   n_estimators: 200
   max_depth: 3
   learning_rate: 0.05
@@ -119,14 +123,23 @@ api:
     - "http://127.0.0.1:5173"
   redis_url_env: "REDIS_URL"   # e.g. redis://localhost:6379/0; falls back to in-memory
   cors_origins_env: "CORS_ORIGINS"   # comma-separated prod origins; overrides cors_origins
+  trust_proxy_headers: true       # only enable behind the trusted Railway/nginx edge
   rate_limit:
     enabled: true
     window_seconds: 60         # /api/calibration/run: max 1 request per IP per window
   cache:
     calibration_ttl: 900       # seconds; calibration result freshness during a session
     regime_ttl: 86400          # regime inference cached for a full day
+    regime_live_retry_ttl: 900 # retry transient synthetic fallbacks in Live mode
     surface_ttl: 900
     comparison_ttl: 900
+  jobs:
+    max_entries: 100          # bound in-process background calibration metadata
+    retention_seconds: 3600   # keep completed/error results for one hour
+  regime_analysis_timeout: 3600  # lease preventing duplicate heavy background analyses
+  websocket:
+    max_concurrent_calibrations: 2  # bound CPU-heavy calibration worker threads per process
+    per_ip_lease_ttl: 900            # one active stream per normalized client IP across workers
   surface:                     # strike x maturity grid returned by /api/surface
     n_strikes: 25
     n_maturities: 8

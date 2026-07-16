@@ -12,7 +12,8 @@ import type {
   SurfaceResponse,
 } from './types'
 
-export const API_BASE: string = import.meta.env.VITE_API_BASE ?? ''
+/** Remove trailing slashes so endpoint paths compose consistently. */
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').trim().replace(/\/+$/, '')
 
 /** A 202 from the heavy regime-parameter analysis means "computing, poll again". */
 export class AnalysisPendingError extends Error {
@@ -23,10 +24,13 @@ export class AnalysisPendingError extends Error {
 }
 
 export class ApiError extends Error {
-  status: number
-  constructor(status: number, message: string) {
+  readonly status: number
+  readonly path: string
+
+  constructor(status: number, path: string, message: string) {
     super(message)
     this.status = status
+    this.path = path
     this.name = 'ApiError'
   }
 }
@@ -36,19 +40,23 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   try {
     res = await fetch(`${API_BASE}${path}`, { signal, headers: { Accept: 'application/json' } })
   } catch (err) {
-    throw new ApiError(0, `Network error contacting API: ${(err as Error).message}`)
+    if (isAbortError(err)) throw err
+    throw new ApiError(0, path, 'Unable to reach the API. Check that the service is running and try again.')
   }
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new ApiError(res.status, `API ${res.status} on ${path}: ${body.slice(0, 200)}`)
+    throw new ApiError(res.status, path, await responseErrorMessage(res))
   }
-  return (await res.json()) as T
+  try {
+    return (await res.json()) as T
+  } catch {
+    throw new ApiError(res.status, path, 'The API returned an invalid response.')
+  }
 }
 
 const live = (preferLive: boolean) => (preferLive ? '' : '?live=false')
 
 export const api = {
-  health: () => getJSON<HealthResponse>('/health'),
+  health: (signal?: AbortSignal) => getJSON<HealthResponse>('/health', signal),
 
   calibration: (preferLive = true, signal?: AbortSignal) =>
     getJSON<CalibrationResponse>(`/api/calibration/run${live(preferLive)}`, signal),
@@ -71,24 +79,77 @@ export const api = {
   // 202 while the heavy analysis runs in the background -> surfaced as AnalysisPendingError
   // so React Query can keep polling.
   regimeParameters: async (signal?: AbortSignal): Promise<RegimeParametersResponse> => {
-    const res = await fetch(`${API_BASE}/api/regime/parameters`, {
-      signal,
-      headers: { Accept: 'application/json' },
-    }).catch((err) => {
-      throw new ApiError(0, `Network error: ${(err as Error).message}`)
-    })
+    let res: Response
+    try {
+      res = await fetch(`${API_BASE}/api/regime/parameters`, {
+        signal,
+        headers: { Accept: 'application/json' },
+      })
+    } catch (err) {
+      if (isAbortError(err)) throw err
+      throw new ApiError(
+        0,
+        '/api/regime/parameters',
+        'Unable to reach the API. Check that the service is running and try again.',
+      )
+    }
     if (res.status === 202) throw new AnalysisPendingError()
-    if (!res.ok) throw new ApiError(res.status, `API ${res.status} on /api/regime/parameters`)
-    return (await res.json()) as RegimeParametersResponse
+    if (!res.ok) {
+      throw new ApiError(
+        res.status,
+        '/api/regime/parameters',
+        await responseErrorMessage(res),
+      )
+    }
+    try {
+      return (await res.json()) as RegimeParametersResponse
+    } catch {
+      throw new ApiError(
+        res.status,
+        '/api/regime/parameters',
+        'The API returned an invalid response.',
+      )
+    }
   },
 }
 
 /** Build the WebSocket URL for the calibration stream, honouring API_BASE. */
 export function calibrationWsUrl(preferLive = true): string {
-  const query = preferLive ? '' : '?live=false'
-  if (API_BASE) {
-    return `${API_BASE.replace(/^http/, 'ws')}/ws/calibration${query}`
+  return buildCalibrationWsUrl(API_BASE, window.location.href, preferLive)
+}
+
+export function buildCalibrationWsUrl(
+  apiBase: string,
+  pageUrl: string,
+  preferLive = true,
+): string {
+  const base = new URL(apiBase.replace(/\/+$/, '') || '/', pageUrl)
+  base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
+  base.pathname = `${base.pathname.replace(/\/$/, '')}/ws/calibration`
+  base.search = preferLive ? '' : '?live=false'
+  base.hash = ''
+  return base.toString()
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+async function responseErrorMessage(response: Response): Promise<string> {
+  const fallback =
+    response.status === 429
+      ? 'Too many requests. Wait a moment before trying again.'
+      : response.status >= 500
+        ? 'The API encountered an error. Please try again.'
+        : `The API rejected the request (${response.status}).`
+
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    const body = (await response.json().catch(() => null)) as
+      | { detail?: unknown; message?: unknown }
+      | null
+    const detail = body?.detail ?? body?.message
+    if (typeof detail === 'string' && detail.trim()) return detail.slice(0, 240)
   }
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${window.location.host}/ws/calibration${query}`
+  return fallback
 }

@@ -10,15 +10,28 @@ on:
     types: [completed]
     branches: [main, master]
 
+concurrency:
+  group: railway-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: Deploy to Railway
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      # Deploy the exact commit that passed CI, not whatever happens to be at the tip of
+      # the default branch when this workflow starts.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
 
       - name: Check for Railway token
         id: guard
@@ -30,14 +43,18 @@ jobs:
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install Railway CLI
+      - name: Install pinned Railway CLI
         if: steps.guard.outputs.deploy == 'true'
-        run: npm i -g @railway/cli
+        run: npm install --global @railway/cli@5.26.1
 
       - name: Deploy API service
         if: steps.guard.outputs.deploy == 'true'
-        run: railway up --service "${{ vars.RAILWAY_API_SERVICE || 'api' }}" --detach
+        run: >-
+          railway up --ci --service "${{ vars.RAILWAY_API_SERVICE || 'api' }}"
+          --message "CI ${{ github.event.workflow_run.head_sha }}"
 
       - name: Deploy frontend service
         if: steps.guard.outputs.deploy == 'true'
-        run: railway up --service "${{ vars.RAILWAY_FRONTEND_SERVICE || 'frontend' }}" --detach
+        run: >-
+          railway up --ci --service "${{ vars.RAILWAY_FRONTEND_SERVICE || 'frontend' }}"
+          --message "CI ${{ github.event.workflow_run.head_sha }}"

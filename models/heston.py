@@ -36,7 +36,9 @@ Volatility...", Review of Financial Studies 6(2), 1993.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
+from numbers import Integral
 
 import numpy as np
 
@@ -61,6 +63,10 @@ class HestonParams:
     v0: float
 
     def __post_init__(self) -> None:
+        for name in ("kappa", "theta", "sigma", "rho", "v0"):
+            value = getattr(self, name)
+            if not np.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value!r}")
         if self.kappa <= 0:
             raise ValueError(f"kappa must be > 0, got {self.kappa}")
         if self.theta <= 0:
@@ -89,8 +95,27 @@ class HestonParams:
     @classmethod
     def from_array(cls, arr: np.ndarray) -> "HestonParams":
         """Build a ``HestonParams`` from an array [kappa, theta, sigma, rho, v0]."""
-        kappa, theta, sigma, rho, v0 = (float(x) for x in arr)
+        values = np.asarray(arr, dtype=float).reshape(-1)
+        if values.size != 5:
+            raise ValueError(f"expected exactly 5 Heston parameters, got {values.size}")
+        kappa, theta, sigma, rho, v0 = (float(x) for x in values)
         return cls(kappa=kappa, theta=theta, sigma=sigma, rho=rho, v0=v0)
+
+
+def _validate_market_inputs(
+    spot: float,
+    rate: float,
+    div_yield: float,
+    tau: float,
+) -> None:
+    values = {"spot": spot, "rate": rate, "div_yield": div_yield, "tau": tau}
+    for name, value in values.items():
+        if not np.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value!r}")
+    if spot <= 0.0:
+        raise ValueError(f"spot must be > 0, got {spot}")
+    if tau < 0.0:
+        raise ValueError(f"tau must be >= 0, got {tau}")
 
 
 def heston_characteristic_function(
@@ -142,7 +167,12 @@ def heston_characteristic_function(
         C = (kappa theta / sigma^2)[(xi - d) tau - 2 ln((1 - g2 e^{-d tau})/(1 - g2))],
         D = ((xi - d) / sigma^2)(1 - e^{-d tau})/(1 - g2 e^{-d tau}).
     """
+    _validate_market_inputs(spot, rate, div_yield, tau)
     u = np.asarray(u, dtype=np.complex128)
+    if not np.all(np.isfinite(u)):
+        raise ValueError("Fourier arguments must all be finite")
+    if tau == 0.0:
+        return np.exp(1j * u * np.log(spot))
 
     kappa, theta, sigma, rho, v0 = (
         params.kappa,
@@ -193,11 +223,9 @@ def heston_characteristic_function(
 # Gauss-Legendre quadrature.  Legendre nodes are strictly interior to the
 # interval, so the removable 1/(i u) singularity at u = 0 is never sampled.
 
-import functools
-
 
 @functools.lru_cache(maxsize=16)
-def _gauss_legendre_nodes(n_nodes: int, upper_limit: float) -> tuple:
+def _gauss_legendre_nodes(n_nodes: int, upper_limit: float) -> tuple[np.ndarray, np.ndarray]:
     """Gauss-Legendre nodes and weights mapped from [-1, 1] onto (0, U).
 
     ``numpy.polynomial.legendre.leggauss`` returns ``n`` nodes/weights for the
@@ -213,6 +241,10 @@ def _gauss_legendre_nodes(n_nodes: int, upper_limit: float) -> tuple:
     t, w = np.polynomial.legendre.leggauss(n_nodes)
     nodes = 0.5 * upper_limit * (t + 1.0)
     weights = 0.5 * upper_limit * w
+    # Cached arrays must not be mutable by callers, or one accidental write would
+    # corrupt every subsequent price using the same quadrature configuration.
+    nodes.setflags(write=False)
+    weights.setflags(write=False)
     return nodes, weights
 
 
@@ -258,7 +290,31 @@ def heston_price(
     float or np.ndarray
         Option price(s), matching the shape of ``strike``.
     """
-    strikes = np.atleast_1d(np.asarray(strike, dtype=float))
+    if option_type not in {"call", "put"}:
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+    _validate_market_inputs(spot, rate, div_yield, tau)
+    if isinstance(n_nodes, bool) or not isinstance(n_nodes, Integral) or n_nodes < 2:
+        raise ValueError(f"n_nodes must be an integer >= 2, got {n_nodes!r}")
+    n_nodes = int(n_nodes)
+    if not np.isfinite(upper_limit) or upper_limit <= 0.0:
+        raise ValueError(f"upper_limit must be finite and > 0, got {upper_limit!r}")
+
+    strike_array = np.asarray(strike, dtype=float)
+    scalar_input = strike_array.ndim == 0
+    original_shape = strike_array.shape
+    strikes = np.atleast_1d(strike_array).reshape(-1)
+    if strikes.size == 0:
+        return np.empty(original_shape, dtype=float)
+    if not np.all(np.isfinite(strikes)) or np.any(strikes <= 0.0):
+        raise ValueError("all strikes must be finite and > 0")
+
+    if tau == 0.0:
+        if option_type == "call":
+            price = np.maximum(spot - strikes, 0.0)
+        else:
+            price = np.maximum(strikes - spot, 0.0)
+        return float(price[0]) if scalar_input else price.reshape(original_shape)
+
     nodes, weights = _gauss_legendre_nodes(n_nodes, float(upper_limit))
 
     # Characteristic function at u (for P2) and at u - i (for P1), evaluated once.
@@ -279,12 +335,14 @@ def heston_price(
 
     call = spot * np.exp(-div_yield * tau) * p1 - strikes * np.exp(-rate * tau) * p2
 
+    disc_s = spot * np.exp(-div_yield * tau)
+    disc_k = strikes * np.exp(-rate * tau)
     if option_type == "call":
-        price = call
-    elif option_type == "put":
-        # Put-call parity: P = C - S0 e^{-q tau} + K e^{-r tau}.
-        price = call - spot * np.exp(-div_yield * tau) + strikes * np.exp(-rate * tau)
+        # Remove tiny quadrature violations of the model-free no-arbitrage bounds.
+        price = np.clip(call, np.maximum(disc_s - disc_k, 0.0), disc_s)
     else:
-        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+        # Put-call parity: P = C - S0 e^{-q tau} + K e^{-r tau}.
+        put = call - disc_s + disc_k
+        price = np.clip(put, np.maximum(disc_k - disc_s, 0.0), disc_k)
 
-    return float(price[0]) if np.isscalar(strike) or np.ndim(strike) == 0 else price
+    return float(price[0]) if scalar_input else price.reshape(original_shape)

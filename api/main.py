@@ -15,6 +15,7 @@ Offline mode (no network): set ``HRL_OFFLINE=1`` so every endpoint uses syntheti
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -68,6 +70,7 @@ def _cors_origins(api_cfg: dict) -> list[str]:
         return [o.strip() for o in raw.split(",") if o.strip()]
     return list(api_cfg["cors_origins"])
 
+
 OPENAPI_TAGS = [
     {"name": "calibration", "description": "Fit Heston to the live SPX surface; background jobs."},
     {"name": "surface", "description": "Market vs Heston implied-vol surface grids."},
@@ -97,6 +100,7 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.cache = build_cache(config)
     app.state.jobs = {}  # background calibration-job registry
+    app.state.jobs_lock = threading.RLock()
     app.state.regime_warm = False
     log.info(
         "startup",
@@ -156,16 +160,24 @@ def create_app() -> FastAPI:
             duration_ms = round((time.perf_counter() - start) * 1000, 1)
             log.exception(
                 "request_error",
-                extra={"request_id": request_id, "method": request.method,
-                       "path": request.url.path, "duration_ms": duration_ms},
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "duration_ms": duration_ms,
+                },
             )
             raise
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
         log.info(
             "request",
-            extra={"request_id": request_id, "method": request.method,
-                   "path": request.url.path, "status": response.status_code,
-                   "duration_ms": duration_ms},
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+            },
         )
         response.headers["X-Request-ID"] = request_id
         return response
@@ -177,12 +189,20 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse, tags=["health"], summary="Health check")
     async def health() -> HealthResponse:
+        from api.services.regime_service import regime_model_ready
+
         cache = app.state.cache
+        # Redis clients perform network I/O even for a ping. Keep that work off the
+        # event loop and reuse the single result for the two related health fields.
+        cache_healthy = await run_in_threadpool(lambda: cache.healthy)
+        cache_backend = cache.backend
         return HealthResponse(
             version=api_cfg["version"],
-            cache_backend=cache.backend,
-            redis_healthy=cache.healthy,
-            regime_model_ready=bool(getattr(app.state, "regime_warm", False)),
+            cache_backend=cache_backend,
+            cache_healthy=cache_healthy,
+            redis_configured=cache.redis_configured,
+            redis_healthy=cache_backend == "redis" and cache_healthy,
+            regime_model_ready=regime_model_ready(app.state.config),
             time=datetime.now(timezone.utc),
         )
 

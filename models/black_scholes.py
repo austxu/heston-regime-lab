@@ -31,6 +31,39 @@ import numpy as np
 from scipy.optimize import brentq
 from scipy.stats import norm
 
+_OPTION_TYPES = {"call", "put"}
+
+
+def _validate_contract(
+    spot: float,
+    strike: float,
+    rate: float,
+    div_yield: float,
+    tau: float,
+) -> None:
+    """Validate scalar contract inputs shared by pricing and IV inversion."""
+    values = {
+        "spot": spot,
+        "strike": strike,
+        "rate": rate,
+        "div_yield": div_yield,
+        "tau": tau,
+    }
+    for name, value in values.items():
+        if not np.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value!r}")
+    if spot <= 0.0:
+        raise ValueError(f"spot must be > 0, got {spot}")
+    if strike <= 0.0:
+        raise ValueError(f"strike must be > 0, got {strike}")
+    if tau < 0.0:
+        raise ValueError(f"tau must be >= 0, got {tau}")
+
+
+def _validate_option_type(option_type: str) -> None:
+    if option_type not in _OPTION_TYPES:
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+
 
 def _d1_d2(
     spot: float,
@@ -45,9 +78,7 @@ def _d1_d2(
     d1 = [ln(S0/K) + (r - q + sigma^2/2) tau] / (sigma sqrt(tau));  d2 = d1 - sigma sqrt(tau).
     """
     sqrt_t = np.sqrt(tau)
-    d1 = (np.log(spot / strike) + (rate - div_yield + 0.5 * sigma**2) * tau) / (
-        sigma * sqrt_t
-    )
+    d1 = (np.log(spot / strike) + (rate - div_yield + 0.5 * sigma**2) * tau) / (sigma * sqrt_t)
     d2 = d1 - sigma * sqrt_t
     return d1, d2
 
@@ -76,13 +107,25 @@ def bs_price(
     Returns
     -------
     float
-        The option price.  Handles the degenerate tau <= 0 or sigma <= 0 limits by
-        returning the discounted intrinsic value.
+        The option price. Handles expiry (tau = 0) and zero volatility explicitly.
     """
-    if tau <= 0.0 or sigma <= 0.0:
+    _validate_option_type(option_type)
+    _validate_contract(spot, strike, rate, div_yield, tau)
+    if not np.isfinite(sigma):
+        raise ValueError(f"sigma must be finite, got {sigma!r}")
+    if sigma < 0.0:
+        raise ValueError(f"sigma must be >= 0, got {sigma}")
+
+    # At expiry there is no discounting or remaining diffusion.  Handling this
+    # explicitly also avoids applying a nonsensical negative time horizon.
+    if tau <= 0.0:
+        intrinsic = max(spot - strike, 0.0) if option_type == "call" else max(strike - spot, 0.0)
+        return float(intrinsic)
+
+    if sigma == 0.0:
         forward = spot * np.exp((rate - div_yield) * tau)
-        intrinsic = max(forward - strike, 0.0) if option_type == "call" else max(
-            strike - forward, 0.0
+        intrinsic = (
+            max(forward - strike, 0.0) if option_type == "call" else max(strike - forward, 0.0)
         )
         return float(np.exp(-rate * tau) * intrinsic)
 
@@ -92,9 +135,7 @@ def bs_price(
 
     if option_type == "call":
         return float(disc_s * norm.cdf(d1) - disc_k * norm.cdf(d2))
-    if option_type == "put":
-        return float(disc_k * norm.cdf(-d2) - disc_s * norm.cdf(-d1))
-    raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+    return float(disc_k * norm.cdf(-d2) - disc_s * norm.cdf(-d1))
 
 
 def bs_vega(
@@ -110,7 +151,12 @@ def bs_vega(
     Vega is identical for calls and puts and is strictly positive, which is exactly
     why the implied-vol root is unique.  (phi here is the standard-normal pdf.)
     """
-    if tau <= 0.0 or sigma <= 0.0:
+    _validate_contract(spot, strike, rate, div_yield, tau)
+    if not np.isfinite(sigma):
+        raise ValueError(f"sigma must be finite, got {sigma!r}")
+    if sigma < 0.0:
+        raise ValueError(f"sigma must be >= 0, got {sigma}")
+    if tau == 0.0 or sigma == 0.0:
         return 0.0
     d1, _ = _d1_d2(spot, strike, rate, div_yield, tau, sigma)
     return float(spot * np.exp(-div_yield * tau) * norm.pdf(d1) * np.sqrt(tau))
@@ -149,10 +195,19 @@ def implied_vol(
         The implied volatility, or ``nan`` if ``price`` is outside the no-arbitrage
         range reachable on [lower, upper] (e.g. below intrinsic or above the cap).
     """
+    _validate_option_type(option_type)
+    _validate_contract(spot, strike, rate, div_yield, tau)
+    if not np.isfinite(lower) or not np.isfinite(upper) or not 0.0 <= lower < upper:
+        raise ValueError(
+            f"volatility bounds must satisfy 0 <= lower < upper, got {(lower, upper)!r}"
+        )
+    if not np.isfinite(xtol) or xtol <= 0.0:
+        raise ValueError(f"xtol must be finite and > 0, got {xtol!r}")
     if not np.isfinite(price) or price <= 0.0 or tau <= 0.0:
         return float("nan")
 
-    objective = lambda s: bs_price(spot, strike, rate, div_yield, tau, s, option_type) - price
+    def objective(sigma: float) -> float:
+        return bs_price(spot, strike, rate, div_yield, tau, sigma, option_type) - price
 
     f_lo, f_hi = objective(lower), objective(upper)
     if f_lo * f_hi > 0.0:

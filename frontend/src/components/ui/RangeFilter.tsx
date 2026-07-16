@@ -1,3 +1,5 @@
+import { useId } from 'react'
+
 interface RangeFilterProps {
   label: string
   min: number
@@ -12,10 +14,11 @@ interface RangeFilterProps {
 export function RangeFilter({ label, min, max, step, value, onChange, format }: RangeFilterProps) {
   const [lo, hi] = value
   const fmt = format ?? ((v: number) => v.toString())
+  const labelId = useId()
   return (
-    <div className="min-w-[180px]">
+    <div className="min-w-[180px] flex-1 sm:max-w-[260px]" role="group" aria-labelledby={labelId}>
       <div className="mb-1 flex items-center justify-between">
-        <span className="stat-label">{label}</span>
+        <span id={labelId} className="stat-label">{label}</span>
         <span className="font-mono text-xs text-ink">
           {fmt(lo)} – {fmt(hi)}
         </span>
@@ -28,8 +31,9 @@ export function RangeFilter({ label, min, max, step, value, onChange, format }: 
           step={step}
           value={lo}
           onChange={(e) => onChange([Math.min(Number(e.target.value), hi), hi])}
-          className="w-full accent-sky-400"
+          className="h-5 w-full cursor-pointer accent-sky-400"
           aria-label={`${label} minimum`}
+          aria-valuetext={fmt(lo)}
         />
         <input
           type="range"
@@ -38,8 +42,9 @@ export function RangeFilter({ label, min, max, step, value, onChange, format }: 
           step={step}
           value={hi}
           onChange={(e) => onChange([lo, Math.max(Number(e.target.value), lo)])}
-          className="w-full accent-sky-400"
+          className="h-5 w-full cursor-pointer accent-sky-400"
           aria-label={`${label} maximum`}
+          aria-valuetext={fmt(hi)}
         />
       </div>
     </div>

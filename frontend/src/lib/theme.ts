@@ -20,6 +20,7 @@ export const COLORS = {
 
 // Regime index -> colour and display label. Index order = volatility order (0 = calmest).
 export const REGIME_COLORS = ['#34d399', '#fbbf24', '#f43f5e'] as const
+export const REGIME_ORDER = ['low_vol', 'elevated_vol', 'crisis'] as const
 
 export const REGIME_LABELS: Record<string, string> = {
   low_vol: 'Low Vol',
@@ -32,7 +33,17 @@ export function regimeColor(index: number): string {
 }
 
 export function prettyRegime(label: string): string {
-  return REGIME_LABELS[label] ?? label
+  return (
+    REGIME_LABELS[label] ??
+    label
+      .replaceAll('_', ' ')
+      .replace(/\b\w/g, (character) => character.toUpperCase())
+  )
+}
+
+export function regimeColorForLabel(label: string, fallbackIndex = 0): string {
+  const index = REGIME_ORDER.indexOf(label as (typeof REGIME_ORDER)[number])
+  return regimeColor(index >= 0 ? index : fallbackIndex)
 }
 
 // A dark Plotly layout base shared by every chart.

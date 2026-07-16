@@ -13,8 +13,11 @@ from api.services.comparison_service import get_comparison
 router = APIRouter(prefix="/api", tags=["comparison"])
 
 
-@router.get("/comparison", response_model=ComparisonResponse,
-            summary="Heston vs Black-Scholes vs residual-corrected errors")
+@router.get(
+    "/comparison",
+    response_model=ComparisonResponse,
+    summary="Heston vs Black-Scholes vs residual-corrected errors",
+)
 async def comparison(
     config: dict = Depends(get_config),
     cache: Cache = Depends(get_cache),

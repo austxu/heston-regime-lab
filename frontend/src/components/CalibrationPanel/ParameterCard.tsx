@@ -1,4 +1,5 @@
 import { PARAM_NAMES } from '../../api/types'
+import type { HestonParamValues } from '../../api/types'
 import { PARAM_META } from '../../lib/params'
 import { pct } from '../../lib/format'
 import { Badge } from '../ui/Badge'
@@ -6,7 +7,7 @@ import type { BadgeTone } from '../ui/Badge'
 import { InfoDot } from '../ui/Tooltip'
 
 interface ParameterCardProps {
-  params: Record<string, number> | null
+  params: HestonParamValues | null
   meanError?: number | null
   live?: boolean
 }

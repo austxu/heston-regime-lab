@@ -8,8 +8,8 @@ surface:
    smile/skew; its error grows in the wings.  This is the baseline Heston must beat.
 2. **Heston** — the calibrated stochastic-vol surface, which bends to fit the smile.
 3. **Heston + residual correction** — an XGBoost regressor trained on Heston's *systematic*
-   residuals ``(market_iv - heston_iv)`` as a function of (log-moneyness, maturity, IV
-   level).  Heston leaves structured errors at the tails/short maturities; a gradient-
+   residuals ``(market_iv - heston_iv)`` as a function of (log-moneyness, maturity,
+   Heston IV).  Heston leaves structured errors at the tails/short maturities; a gradient-
    boosted tree mops up that structure.  Improvement is measured **out-of-fold** (K-fold)
    so it reflects genuine generalisation, not overfit.
 
@@ -27,10 +27,10 @@ from calibration.optimizer import MarketData, heston_implied_vols
 from models.black_scholes import bs_price, implied_vol
 from models.heston import HestonParams
 
-
 # --------------------------------------------------------------------------- #
 # Residual-correction model                                                    #
 # --------------------------------------------------------------------------- #
+
 
 class ResidualModel:
     """Gradient-boosted regressor of Heston IV residuals (XGBoost, sklearn fallback)."""
@@ -57,8 +57,10 @@ class ResidualModel:
 
             params.pop("subsample", None)
             return GradientBoostingRegressor(
-                n_estimators=params["n_estimators"], max_depth=params["max_depth"],
-                learning_rate=params["learning_rate"], random_state=params["random_state"],
+                n_estimators=params["n_estimators"],
+                max_depth=params["max_depth"],
+                learning_rate=params["learning_rate"],
+                random_state=params["random_state"],
                 subsample=float(self.cfg["subsample"]),
             )
 
@@ -74,11 +76,31 @@ class ResidualModel:
         return np.asarray(self.model.predict(features), dtype=float)
 
 
-def build_residual_features(data: MarketData, market_iv: np.ndarray) -> np.ndarray:
-    """Feature matrix for the residual model: [log_moneyness, maturity, market_iv]."""
+def build_residual_features(
+    data: MarketData,
+    heston_iv: np.ndarray,
+    feature_cols: list[str] | None = None,
+) -> np.ndarray:
+    """Build configured, prediction-time-safe features for the residual model.
+
+    Market IV is the prediction target and must never be an input feature.  Heston IV
+    is available at inference time and gives the corrector a model-level baseline.
+    """
     forward = data.spot * np.exp((data.rate - data.div_yield) * data.maturities)
     log_moneyness = np.log(data.strikes / forward)
-    return np.column_stack([log_moneyness, data.maturities, market_iv])
+    available = {
+        "log_moneyness": log_moneyness,
+        "spot_moneyness": data.strikes / data.spot,
+        "maturity": data.maturities,
+        "heston_iv": np.asarray(heston_iv, dtype=float),
+    }
+    columns = feature_cols or ["log_moneyness", "maturity", "heston_iv"]
+    missing = [name for name in columns if name not in available]
+    if missing:
+        raise ValueError(
+            f"unsupported residual feature columns {missing}; available={sorted(available)}"
+        )
+    return np.column_stack([available[name] for name in columns])
 
 
 def _kfold_indices(n: int, k: int, seed: int) -> list[np.ndarray]:
@@ -91,12 +113,14 @@ def out_of_fold_correction(
 ) -> np.ndarray:
     """Out-of-fold predicted residuals (honest generalisation estimate).
 
-    For each fold, train on the other folds and predict the held-out residuals.  Falls
-    back to in-sample predictions when there are too few points to split.
+    For each fold, train on the other folds and predict the held-out residuals.  Leaves
+    the residual uncorrected when there are too few points for an honest split.
     """
     n = len(residuals)
+    if n == 0:
+        return np.empty(0, dtype=float)
     if n < 2 * n_folds:
-        return ResidualModel(config).fit(features, residuals).predict(features)
+        return np.zeros(n, dtype=float)
     oof = np.zeros(n)
     folds = _kfold_indices(n, n_folds, int(config["residual_model"]["random_state"]))
     for i, test_idx in enumerate(folds):
@@ -109,6 +133,7 @@ def out_of_fold_correction(
 # --------------------------------------------------------------------------- #
 # Comparison                                                                   #
 # --------------------------------------------------------------------------- #
+
 
 @dataclass
 class PricingComparison:
@@ -145,30 +170,36 @@ def _flat_bs_iv(data: MarketData) -> np.ndarray:
         atm_vol = float(ivs[np.argmin(np.abs(strikes - forward))])
         for j, k in zip(np.where(mask)[0], strikes):
             otype = "put" if k < forward else "call"
-            price = bs_price(data.spot, float(k), data.rate, data.div_yield, float(tau), atm_vol, otype)
-            out[j] = implied_vol(price, data.spot, float(k), data.rate, data.div_yield, float(tau), otype)
+            price = bs_price(
+                data.spot, float(k), data.rate, data.div_yield, float(tau), atm_vol, otype
+            )
+            out[j] = implied_vol(
+                price, data.spot, float(k), data.rate, data.div_yield, float(tau), otype
+            )
     return out
 
 
 def _bucket_errors(key: np.ndarray, errs: dict, edges: np.ndarray, label: str) -> list:
     """Mean abs error per model within bins of ``key`` (moneyness or maturity)."""
     out = []
-    idx = np.digitize(key, edges)
-    for b in range(1, len(edges)):
+    idx = np.searchsorted(edges, key, side="right") - 1
+    # Histogram convention: the final bin includes its right endpoint.
+    idx[key == edges[-1]] = len(edges) - 2
+    for b in range(len(edges) - 1):
         m = idx == b
         if not np.any(m):
             continue
-        out.append({
-            label: float((edges[b - 1] + edges[b]) / 2),
-            "n": int(m.sum()),
-            **{name: float(np.nanmean(np.abs(e[m]))) for name, e in errs.items()},
-        })
+        out.append(
+            {
+                label: float((edges[b] + edges[b + 1]) / 2),
+                "n": int(m.sum()),
+                **{name: float(np.nanmean(np.abs(e[m]))) for name, e in errs.items()},
+            }
+        )
     return out
 
 
-def compare_pricing(
-    data: MarketData, params: HestonParams, config: dict
-) -> PricingComparison:
+def compare_pricing(data: MarketData, params: HestonParams, config: dict) -> PricingComparison:
     """Score BS / Heston / Heston+residual against the market surface in IV space.
 
     Parameters
@@ -182,7 +213,8 @@ def compare_pricing(
     """
     quad = config.get("quadrature", {})
     heston_iv = heston_implied_vols(
-        params, data,
+        params,
+        data,
         n_nodes=int(quad.get("n_nodes", 128)),
         upper_limit=float(quad.get("upper_limit", 200.0)),
     )
@@ -191,7 +223,11 @@ def compare_pricing(
     # Residual correction trained on Heston's structured errors (out-of-fold).
     valid = np.isfinite(heston_iv) & np.isfinite(data.market_iv)
     residuals = np.where(valid, data.market_iv - heston_iv, 0.0)
-    feats = build_residual_features(data, np.where(valid, data.market_iv, 0.0))
+    feats = build_residual_features(
+        data,
+        np.where(valid, heston_iv, 0.0),
+        feature_cols=list(config["residual_model"]["feature_cols"]),
+    )
     oof_resid = out_of_fold_correction(feats[valid], residuals[valid], config)
     corrected_iv = heston_iv.copy()
     corrected_iv[valid] = heston_iv[valid] + oof_resid
@@ -208,8 +244,12 @@ def compare_pricing(
     tau_edges = np.unique(np.r_[data.maturities, data.maturities.max() * 1.001])
 
     return PricingComparison(
-        strike=data.strikes, maturity=data.maturities, moneyness=moneyness,
-        market_iv=data.market_iv, bs_flat_iv=bs_iv, heston_iv=heston_iv,
+        strike=data.strikes,
+        maturity=data.maturities,
+        moneyness=moneyness,
+        market_iv=data.market_iv,
+        bs_flat_iv=bs_iv,
+        heston_iv=heston_iv,
         corrected_iv=corrected_iv,
         mae_bs=float(np.nanmean(np.abs(err_bs))),
         mae_heston=float(np.nanmean(np.abs(err_h))),

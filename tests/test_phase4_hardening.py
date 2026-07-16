@@ -60,8 +60,13 @@ def test_json_log_formatter_emits_valid_json():
     from api.logging_config import JsonFormatter
 
     rec = logging.LogRecord(
-        name="hrl.api", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="request", args=(), exc_info=None,
+        name="hrl.api",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="request",
+        args=(),
+        exc_info=None,
     )
     rec.status = 200
     rec.path = "/health"

@@ -13,7 +13,9 @@ from api.services.surface_service import get_surface
 router = APIRouter(prefix="/api", tags=["surface"])
 
 
-@router.get("/surface", response_model=SurfaceResponse, summary="Implied-vol surface (market + Heston)")
+@router.get(
+    "/surface", response_model=SurfaceResponse, summary="Implied-vol surface (market + Heston)"
+)
 async def surface(
     config: dict = Depends(get_config),
     cache: Cache = Depends(get_cache),

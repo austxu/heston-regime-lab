@@ -32,11 +32,23 @@ tsconfig already sets noEmit). Don't combine `-b` with `--noEmit`.
 
 2026-06-24 | The frontend nginx `proxy_pass http://api:8000` only resolves under
 docker-compose (shared network alias). On Railway, services don't see each other by bare
-name | For Railway, build the frontend with `VITE_API_BASE` = the API's public URL (the SPA
-calls it cross-origin; API allows it via `CORS_ORIGINS`), or use the `*.railway.internal`
-host. Keep the build arg so compose (empty -> nginx proxy) and Railway both work.
+name | Prefer same-origin proxying with `API_HOST=${{api.RAILWAY_PRIVATE_DOMAIN}}` and a
+fixed referenced `API_PORT`; use `VITE_API_BASE` + exact CORS origins only when the API is
+intentionally public.
 
 2026-06-24 | Can't deploy to Railway from this environment (needs the user's account/login).
 | For deploy phases, produce all config + CI/CD that auto-deploys once a token secret exists,
 document the manual steps in DEPLOY.md, and use a placeholder live URL — be explicit that the
 deploy itself is the user's step rather than implying it's done.
+
+2026-07-15 | nginx returned plain text from `/health` while the typed dashboard client
+expected the API's JSON health contract | Platform/container liveness should use `/`; proxy
+the browser-facing `/health` route to FastAPI so local Compose and production behave alike.
+
+2026-07-15 | A root Docker build context combined with `COPY . .` can send `.git`, virtual
+environments, node_modules, and secrets into an API image | Maintain `.dockerignore` and use
+explicit runtime-only `COPY` statements; run the resulting process as a non-root UID.
+
+2026-07-15 | A `workflow_run` deployment that checks out the default branch can deploy a
+newer commit than the one CI actually tested | Check out `workflow_run.head_sha`, pin the
+deployment CLI, and serialize production deploys.

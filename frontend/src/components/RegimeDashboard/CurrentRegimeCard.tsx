@@ -1,11 +1,17 @@
 import type { RegimeCurrentResponse } from '../../api/types'
-import { prettyRegime, regimeColor } from '../../lib/theme'
+import { marketDate } from '../../lib/format'
+import { REGIME_ORDER, prettyRegime, regimeColor, regimeColorForLabel } from '../../lib/theme'
 
 /** Big current-regime badge plus posterior probabilities as labelled CSS bars. */
 export function CurrentRegimeCard({ data }: { data: RegimeCurrentResponse }) {
   const color = regimeColor(data.regime)
-  // Probabilities in regime order if possible; fall back to entries.
-  const entries = Object.entries(data.probabilities)
+  const entries = Object.entries(data.probabilities).sort(([a], [b]) => {
+    const ai = REGIME_ORDER.indexOf(a as (typeof REGIME_ORDER)[number])
+    const bi = REGIME_ORDER.indexOf(b as (typeof REGIME_ORDER)[number])
+    return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi)
+  })
+  const probabilities = entries.map(([, probability]) => probability).filter(Number.isFinite)
+  const confidence = probabilities.length ? Math.max(...probabilities) : null
 
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -21,8 +27,8 @@ export function CurrentRegimeCard({ data }: { data: RegimeCurrentResponse }) {
           </span>
         </div>
         <p className="mt-3 text-xs text-muted">
-          as of {new Date(data.as_of).toLocaleDateString()} · confidence{' '}
-          {(Math.max(...Object.values(data.probabilities)) * 100).toFixed(1)}%
+          as of {marketDate(data.as_of)}
+          {confidence != null && ` · confidence ${(confidence * 100).toFixed(1)}%`}
         </p>
       </div>
 
@@ -30,17 +36,25 @@ export function CurrentRegimeCard({ data }: { data: RegimeCurrentResponse }) {
         <span className="stat-label">Posterior probabilities</span>
         <div className="mt-3 space-y-2.5">
           {entries.map(([label, p], i) => {
-            const c = regimeColor(i)
+            const c = regimeColorForLabel(label, i)
+            const percentage = Number.isFinite(p) ? Math.max(0, Math.min(100, p * 100)) : 0
             return (
               <div key={label}>
                 <div className="flex items-center justify-between text-xs">
                   <span style={{ color: c }}>{prettyRegime(label)}</span>
-                  <span className="font-mono tabular-nums text-muted">{(p * 100).toFixed(1)}%</span>
+                  <span className="font-mono tabular-nums text-muted">{percentage.toFixed(1)}%</span>
                 </div>
-                <div className="mt-1 h-2 overflow-hidden rounded-full bg-panel2">
+                <div
+                  role="progressbar"
+                  aria-label={`${prettyRegime(label)} probability`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Number(percentage.toFixed(1))}
+                  className="mt-1 h-2 overflow-hidden rounded-full bg-panel2"
+                >
                   <div
                     className="h-full rounded-full transition-all"
-                    style={{ width: `${Math.max(p * 100, 1)}%`, backgroundColor: c }}
+                    style={{ width: `${percentage}%`, backgroundColor: c }}
                   />
                 </div>
               </div>

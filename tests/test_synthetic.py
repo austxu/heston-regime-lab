@@ -159,8 +159,10 @@ def test_bs_put_call_parity():
 
 def test_bs_vega_matches_finite_difference():
     h = 1e-5
-    fd = (bs_price(SPOT, 100.0, RATE, DIV, 0.75, 0.25 + h, "call")
-          - bs_price(SPOT, 100.0, RATE, DIV, 0.75, 0.25 - h, "call")) / (2 * h)
+    fd = (
+        bs_price(SPOT, 100.0, RATE, DIV, 0.75, 0.25 + h, "call")
+        - bs_price(SPOT, 100.0, RATE, DIV, 0.75, 0.25 - h, "call")
+    ) / (2 * h)
     assert abs(bs_vega(SPOT, 100.0, RATE, DIV, 0.75, 0.25) - fd) < 1e-4
 
 
@@ -174,8 +176,9 @@ def test_heston_reduces_to_black_scholes_limit():
     v0 = 0.04
     params = HestonParams(2.0, v0, 1e-6, -0.3, v0)
     for strike in (80.0, 100.0, 120.0):
-        h = heston_price(params, SPOT, strike, RATE, DIV, 0.75, "call",
-                         n_nodes=256, upper_limit=300.0)
+        h = heston_price(
+            params, SPOT, strike, RATE, DIV, 0.75, "call", n_nodes=256, upper_limit=300.0
+        )
         b = bs_price(SPOT, strike, RATE, DIV, 0.75, np.sqrt(v0), "call")
         assert abs(h - b) / b < 1e-3
 

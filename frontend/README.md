@@ -1,14 +1,22 @@
 # heston-regime-lab — frontend
 
 React + TypeScript + Vite dashboard for the heston-regime-lab API. Tailwind (dark theme),
-Plotly charts, React Query for data, native WebSocket for live calibration.
+lazy trace-scoped Plotly charts, React Query for data, and native WebSocket calibration.
 
 ```bash
-npm install
-npm run dev      # http://localhost:5173 (proxies /api and /ws to the API on :8000)
-npm run build    # type-check (tsc -b) + production build to dist/
+npm ci
+npm run dev        # http://localhost:5173; proxies /api and /ws to the API on :8000
+npm run typecheck
+npm run lint
+npm test
+npm run build      # type-check + production build to dist/
 ```
 
-Point at a non-default backend with `VITE_API_TARGET` (dev proxy) or `VITE_API_BASE`
-(cross-origin). Views: **Vol Surface**, **Live Calibration** (WebSocket), **Regime
-Dashboard**, **Model Comparison**. See the repository root README for the full project.
+Use `VITE_API_TARGET` to change the local development proxy target. Set `VITE_API_BASE`
+only when the browser must call a cross-origin deployment directly; both HTTP requests and
+the calibration WebSocket derive from it. Same-origin deployment remains the preferred path.
+
+Views are deep-linkable at `#surface`, `#calibration`, `#regime`, and `#comparison`.
+The expensive bootstrapped regime study runs only when requested from the regime view;
+its result is cached and the lighter current/history panels remain immediately usable.
+See the repository root README for the full project and deployment instructions.

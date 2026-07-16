@@ -27,7 +27,7 @@ def resolve_prefer_live(
     live: bool | None = Query(
         default=None,
         description="Force live (true) or offline/synthetic (false) data. "
-                    "Defaults to live unless HRL_OFFLINE is set.",
+        "Defaults to live unless HRL_OFFLINE is set.",
     ),
 ) -> bool:
     if live is not None:

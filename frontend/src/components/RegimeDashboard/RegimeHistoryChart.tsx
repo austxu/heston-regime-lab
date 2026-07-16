@@ -9,6 +9,10 @@ export function RegimeHistoryChart({ data }: { data: RegimeHistoryResponse }) {
 
   const shapes = useMemo(() => buildBands(points), [points])
 
+  if (!points.length) {
+    return <p className="py-12 text-center text-sm text-muted">No regime history is available.</p>
+  }
+
   return (
     <div>
       <div className="mb-3 flex flex-wrap gap-3">
@@ -20,6 +24,7 @@ export function RegimeHistoryChart({ data }: { data: RegimeHistoryResponse }) {
         ))}
       </div>
       <Plot
+        ariaLabel="SPX price history with colored market-regime bands"
         data={[
           {
             type: 'scatter',
@@ -35,7 +40,10 @@ export function RegimeHistoryChart({ data }: { data: RegimeHistoryResponse }) {
           showlegend: false,
           shapes,
           xaxis: { type: 'date', gridcolor: COLORS.edge },
-          yaxis: { title: { text: 'SPX (synthetic)' }, gridcolor: COLORS.edge },
+          yaxis: {
+            title: { text: data.provenance.source === 'synthetic' ? 'SPX (synthetic)' : 'SPX' },
+            gridcolor: COLORS.edge,
+          },
           margin: { l: 60, r: 16, t: 8, b: 36 },
         })}
         config={PLOT_CONFIG}

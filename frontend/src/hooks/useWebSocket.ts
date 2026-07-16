@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export type WsStatus = 'idle' | 'connecting' | 'open' | 'closed' | 'error'
+export type WsStatus = 'idle' | 'connecting' | 'open' | 'retrying' | 'closed' | 'error'
 
 interface UseWebSocketOptions<T> {
   onMessage: (msg: T) => void
   onOpen?: () => void
   onClose?: (ev: CloseEvent) => void
-  /** Return false to suppress automatic reconnect on a given close (e.g. job finished). */
-  shouldReconnect?: () => boolean
+  /** Return false to suppress automatic reconnect on a given close (for example, a finished job). */
+  shouldReconnect?: (ev: CloseEvent) => boolean
   maxRetries?: number
   baseDelay?: number
   maxDelay?: number
 }
 
-interface UseWebSocketResult {
+export interface UseWebSocketResult {
   status: WsStatus
   retries: number
   connect: (url: string) => void
@@ -21,13 +21,11 @@ interface UseWebSocketResult {
 }
 
 /**
- * Imperative WebSocket hook with **exponential backoff reconnection**.
+ * Imperative WebSocket hook with bounded exponential-backoff reconnection.
  *
- * On an unexpected close it retries with delay `min(maxDelay, base * 2^n)` plus jitter, up
- * to `maxRetries`. A manual `disconnect()` or a `shouldReconnect()` returning false stops
- * reconnection (used by the calibration stream so a finished run doesn't restart). JSON
- * messages are parsed and handed to `onMessage`. Callbacks are kept in refs so changing
- * them never tears down the socket.
+ * A monotonically increasing connection generation makes callbacks from replaced sockets inert.
+ * That prevents an old socket's delayed close event from scheduling a second connection after a
+ * manual restart. Callback refs also keep consumer renders from tearing down an active stream.
  */
 export function useWebSocket<T>(opts: UseWebSocketOptions<T>): UseWebSocketResult {
   const { maxRetries = 6, baseDelay = 500, maxDelay = 15_000 } = opts
@@ -39,81 +37,158 @@ export function useWebSocket<T>(opts: UseWebSocketOptions<T>): UseWebSocketResul
 
   const wsRef = useRef<WebSocket | null>(null)
   const urlRef = useRef<string | null>(null)
-  const manualClose = useRef(false)
+  const generationRef = useRef(0)
   const retryRef = useRef(0)
   const timerRef = useRef<number | null>(null)
+  const openRef = useRef<(generation: number) => void>(() => undefined)
 
-  const open = useCallback(() => {
-    const url = urlRef.current
-    if (!url) return
-    setStatus('connecting')
-    let ws: WebSocket
-    try {
-      ws = new WebSocket(url)
-    } catch {
-      setStatus('error')
-      return
+  const clearRetryTimer = useCallback(() => {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
     }
-    wsRef.current = ws
+  }, [])
 
-    ws.onopen = () => {
-      retryRef.current = 0
-      setRetries(0)
-      setStatus('open')
-      optsRef.current.onOpen?.()
-    }
-    ws.onmessage = (e: MessageEvent) => {
-      try {
-        optsRef.current.onMessage(JSON.parse(e.data) as T)
-      } catch {
-        // ignore malformed frames
+  const scheduleReconnect = useCallback(
+    (generation: number, event: CloseEvent) => {
+      if (generation !== generationRef.current || !urlRef.current) return
+      if (optsRef.current.shouldReconnect && !optsRef.current.shouldReconnect(event)) {
+        setStatus('closed')
+        return
       }
+      if (retryRef.current >= maxRetries) {
+        setStatus('error')
+        return
+      }
+
+      const retryNumber = retryRef.current + 1
+      const exponentialDelay = Math.min(maxDelay, baseDelay * 2 ** retryRef.current)
+      const jitter = Math.random() * Math.min(250, exponentialDelay * 0.2)
+      retryRef.current = retryNumber
+      setRetries(retryNumber)
+      setStatus('retrying')
+      clearRetryTimer()
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        openRef.current(generation)
+      }, exponentialDelay + jitter)
+    },
+    [baseDelay, clearRetryTimer, maxDelay, maxRetries],
+  )
+
+  const open = useCallback(
+    (generation: number) => {
+      const url = urlRef.current
+      if (!url || generation !== generationRef.current) return
+
+      setStatus('connecting')
+      let socket: WebSocket
+      try {
+        socket = new WebSocket(url)
+      } catch {
+        scheduleReconnect(generation, syntheticCloseEvent())
+        return
+      }
+      wsRef.current = socket
+
+      socket.onopen = () => {
+        if (generation !== generationRef.current || wsRef.current !== socket) {
+          socket.close(1000, 'Superseded connection')
+          return
+        }
+        // Keep the retry budget for the lifetime of this logical connection. An
+        // unstable server can successfully complete the WebSocket handshake and
+        // then drop immediately; resetting here would make every such cycle retry
+        // number one forever. A manual connect/disconnect starts a fresh budget.
+        setStatus('open')
+        optsRef.current.onOpen?.()
+      }
+
+      socket.onmessage = (event: MessageEvent<unknown>) => {
+        if (generation !== generationRef.current || wsRef.current !== socket) return
+        if (typeof event.data !== 'string') return
+        try {
+          optsRef.current.onMessage(JSON.parse(event.data) as T)
+        } catch {
+          // A malformed or non-JSON frame should not terminate an otherwise healthy stream.
+        }
+      }
+
+      socket.onerror = () => {
+        // Browsers intentionally hide WebSocket error details. The ensuing close event handles
+        // retry state; if one never arrives, closing here guarantees forward progress.
+        if (generation === generationRef.current && wsRef.current === socket) {
+          try {
+            socket.close()
+          } catch {
+            wsRef.current = null
+            scheduleReconnect(generation, syntheticCloseEvent())
+          }
+        }
+      }
+
+      socket.onclose = (event: CloseEvent) => {
+        if (generation !== generationRef.current || wsRef.current !== socket) return
+        wsRef.current = null
+        optsRef.current.onClose?.(event)
+        scheduleReconnect(generation, event)
+      }
+    },
+    [scheduleReconnect],
+  )
+  openRef.current = open
+
+  const disconnect = useCallback(() => {
+    generationRef.current += 1
+    urlRef.current = null
+    clearRetryTimer()
+    retryRef.current = 0
+    setRetries(0)
+    setStatus('idle')
+
+    const socket = wsRef.current
+    wsRef.current = null
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      socket.close(1000, 'Client disconnected')
     }
-    ws.onerror = () => setStatus('error')
-    ws.onclose = (ev: CloseEvent) => {
-      setStatus('closed')
-      optsRef.current.onClose?.(ev)
-      if (manualClose.current) return
-      if (optsRef.current.shouldReconnect && !optsRef.current.shouldReconnect()) return
-      if (retryRef.current >= maxRetries) return
-      const delay = Math.min(maxDelay, baseDelay * 2 ** retryRef.current) + Math.random() * 250
-      retryRef.current += 1
-      setRetries(retryRef.current)
-      timerRef.current = window.setTimeout(open, delay)
-    }
-  }, [baseDelay, maxDelay, maxRetries])
+  }, [clearRetryTimer])
 
   const connect = useCallback(
     (url: string) => {
-      manualClose.current = false
+      const generation = generationRef.current + 1
+      generationRef.current = generation
+      clearRetryTimer()
       retryRef.current = 0
       setRetries(0)
       urlRef.current = url
-      // Close any existing socket before opening a fresh one.
-      if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) {
-        manualClose.current = true
-        wsRef.current.close()
-        manualClose.current = false
+
+      const previous = wsRef.current
+      wsRef.current = null
+      if (previous && previous.readyState < WebSocket.CLOSING) {
+        previous.close(1000, 'Connection replaced')
       }
-      open()
+      openRef.current(generation)
     },
-    [open],
+    [clearRetryTimer],
   )
 
-  const disconnect = useCallback(() => {
-    manualClose.current = true
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    wsRef.current?.close()
-  }, [])
-
-  // Tear down on unmount.
   useEffect(() => {
     return () => {
-      manualClose.current = true
-      if (timerRef.current) window.clearTimeout(timerRef.current)
-      wsRef.current?.close()
+      generationRef.current += 1
+      urlRef.current = null
+      clearRetryTimer()
+      const socket = wsRef.current
+      wsRef.current = null
+      if (socket && socket.readyState < WebSocket.CLOSING) {
+        socket.close(1000, 'Component unmounted')
+      }
     }
-  }, [])
+  }, [clearRetryTimer])
 
   return { status, retries, connect, disconnect }
+}
+
+/** WebSocket construction errors do not provide a CloseEvent, so use an equivalent signal. */
+function syntheticCloseEvent(): CloseEvent {
+  return new CloseEvent('close', { code: 1006, reason: 'Connection could not be opened' })
 }

@@ -11,10 +11,10 @@ export function StalenessIndicator({ provenance }: { provenance?: Provenance }) 
   if (!provenance) return null
   const fetched = provenance.cached_at ?? provenance.as_of
   const tone = provenance.stale ? 'warn' : provenance.source === 'live' ? 'good' : 'info'
-  const sourceLabel = provenance.source === 'live' ? 'LIVE' : 'SYNTHETIC'
+  const sourceLabel = provenance.source.toUpperCase()
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1">
       <Badge tone={tone}>
         <span
           className={`h-1.5 w-1.5 rounded-full ${

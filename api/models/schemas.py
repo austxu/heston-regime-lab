@@ -9,6 +9,7 @@ live or synthetic data, and how stale it is.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,14 +20,18 @@ class Provenance(BaseModel):
     source: str = Field(description="'live' (yfinance/FRED) or 'synthetic' (offline fallback)")
     as_of: datetime = Field(description="When the underlying data was observed/produced")
     cached_at: datetime | None = Field(default=None, description="When this result was cached")
-    stale: bool = Field(default=False, description="True if served from cache after a refresh failure")
+    stale: bool = Field(
+        default=False, description="True if served from cache after a refresh failure"
+    )
     cache_backend: str = Field(default="memory", description="'redis' or 'memory'")
 
 
 class HealthResponse(BaseModel):
-    status: str = "ok"
+    status: Literal["ok"] = "ok"
     version: str
-    cache_backend: str
+    cache_backend: Literal["redis", "memory"]
+    cache_healthy: bool
+    redis_configured: bool
     redis_healthy: bool
     regime_model_ready: bool
     time: datetime
@@ -137,8 +142,12 @@ class RegimeParametersResponse(BaseModel):
     """Do Heston params differ by regime, and does conditioning improve pricing?"""
 
     alpha: float
-    kruskal_wallis: dict[str, ParameterTest] = Field(description="Per-parameter H-test across regimes")
-    regime_params: dict[str, HestonParamsModel] = Field(description="Calibrated params per regime label")
+    kruskal_wallis: dict[str, ParameterTest] = Field(
+        description="Per-parameter H-test across regimes"
+    )
+    regime_params: dict[str, HestonParamsModel] = Field(
+        description="Calibrated params per regime label"
+    )
     param_samples: dict[str, dict[str, list[float]]] = Field(
         default_factory=dict,
         description="Bootstrapped calibrated samples per regime label per parameter (for density plots)",
@@ -146,9 +155,11 @@ class RegimeParametersResponse(BaseModel):
     static_mae_overall: float
     regime_mae_overall: float
     static_mae_by_regime: dict[str, float] = Field(
-        default_factory=dict, description="Static-calibration mean abs IV error per regime label")
+        default_factory=dict, description="Static-calibration mean abs IV error per regime label"
+    )
     regime_mae_by_regime: dict[str, float] = Field(
-        default_factory=dict, description="Regime-conditional mean abs IV error per regime label")
+        default_factory=dict, description="Regime-conditional mean abs IV error per regime label"
+    )
     regime_conditional_improvement_pct: float
     provenance: Provenance
 
@@ -157,10 +168,11 @@ class RegimeParametersResponse(BaseModel):
 # WebSocket streaming messages                                                 #
 # --------------------------------------------------------------------------- #
 
+
 class CalibrationStreamMessage(BaseModel):
     """One frame on /ws/calibration: progress, the final result, or an error."""
 
-    type: str = Field(description="'progress' | 'done' | 'error'")
+    type: Literal["progress", "done", "error"] = Field(description="'progress' | 'done' | 'error'")
     iteration: int | None = None
     loss: float | None = None
     params: dict[str, float] | None = None
@@ -172,12 +184,14 @@ class JobAcceptedResponse(BaseModel):
     """Acknowledgement that a long calibration was queued as a background task."""
 
     job_id: str
-    status: str = "queued"
+    status: Literal["queued"] = "queued"
     poll: str = Field(description="Endpoint to poll for the result")
 
 
 class JobStatusResponse(BaseModel):
     job_id: str
-    status: str = Field(description="'queued' | 'running' | 'done' | 'error'")
+    status: Literal["queued", "running", "done", "error"] = Field(
+        description="'queued' | 'running' | 'done' | 'error'"
+    )
     result: CalibrationResponse | None = None
     error: str | None = None

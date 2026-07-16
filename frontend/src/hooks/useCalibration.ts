@@ -1,13 +1,14 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { calibrationWsUrl } from '../api/client'
-import type { CalibrationStreamMessage } from '../api/types'
-import { useDataMode } from '../lib/dataMode'
+import type { CalibrationStreamMessage, HestonParamValues } from '../api/types'
+import { useDataMode } from '../lib/dataModeContext'
 import { useWebSocket } from './useWebSocket'
+import type { WsStatus } from './useWebSocket'
 
 export interface CalibrationStep {
   iteration: number
   loss: number
-  params: Record<string, number>
+  params: HestonParamValues
 }
 
 export interface UseCalibrationResult {
@@ -15,11 +16,11 @@ export interface UseCalibrationResult {
   stop: () => void
   running: boolean
   steps: CalibrationStep[]
-  finalParams: Record<string, number> | null
+  finalParams: HestonParamValues | null
   finalError: number | null
   done: boolean
   errorMsg: string | null
-  wsStatus: string
+  wsStatus: WsStatus
   retries: number
 }
 
@@ -33,57 +34,90 @@ export interface UseCalibrationResult {
 export function useCalibration(): UseCalibrationResult {
   const { preferLive } = useDataMode()
   const [steps, setSteps] = useState<CalibrationStep[]>([])
-  const [finalParams, setFinalParams] = useState<Record<string, number> | null>(null)
+  const [finalParams, setFinalParams] = useState<HestonParamValues | null>(null)
   const [finalError, setFinalError] = useState<number | null>(null)
   const [done, setDone] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const completedRef = useRef(false)
+  const disconnectRef = useRef<() => void>(() => undefined)
 
-  const ws = useWebSocket<CalibrationStreamMessage>({
+  const { connect, disconnect, status, retries } = useWebSocket<CalibrationStreamMessage>({
     onOpen: () => {
       // A fresh open (initial or reconnect) means the server is streaming from iteration 1.
       setSteps([])
     },
     onMessage: (m) => {
-      if (m.type === 'progress' && m.iteration != null && m.loss != null && m.params) {
-        setSteps((prev) => [...prev, { iteration: m.iteration!, loss: m.loss!, params: m.params! }])
+      if (m.type === 'progress') {
+        setSteps((prev) => [...prev, { iteration: m.iteration, loss: m.loss, params: m.params }])
       } else if (m.type === 'done') {
         completedRef.current = true
         setDone(true)
         if (m.params) setFinalParams(m.params)
         setFinalError(m.mean_iv_error ?? null)
-        ws.disconnect()
+        disconnectRef.current()
       } else if (m.type === 'error') {
         completedRef.current = true
         setErrorMsg(m.message ?? 'Calibration failed')
-        ws.disconnect()
+        disconnectRef.current()
       }
     },
     shouldReconnect: () => !completedRef.current,
   })
+  disconnectRef.current = disconnect
 
-  const start = useCallback(() => {
-    completedRef.current = false
+  const reset = useCallback(() => {
     setSteps([])
     setFinalParams(null)
     setFinalError(null)
     setDone(false)
     setErrorMsg(null)
-    ws.connect(calibrationWsUrl(preferLive))
-  }, [preferLive, ws])
+  }, [])
 
-  const running = (ws.status === 'open' || ws.status === 'connecting') && !done && !errorMsg
+  const start = useCallback(() => {
+    completedRef.current = false
+    reset()
+    try {
+      connect(calibrationWsUrl(preferLive))
+    } catch {
+      completedRef.current = true
+      setErrorMsg('The configured API address is invalid. Check the frontend environment settings.')
+    }
+  }, [connect, preferLive, reset])
+
+  const stop = useCallback(() => {
+    completedRef.current = true
+    disconnect()
+  }, [disconnect])
+
+  const previousModeRef = useRef(preferLive)
+  useEffect(() => {
+    if (previousModeRef.current === preferLive) return
+    previousModeRef.current = preferLive
+    completedRef.current = true
+    disconnect()
+    reset()
+  }, [disconnect, preferLive, reset])
+
+  const running =
+    (status === 'open' || status === 'connecting' || status === 'retrying') &&
+    !done &&
+    !errorMsg
+
+  const connectionError =
+    status === 'error'
+      ? 'The calibration stream could not connect after several attempts. Check the API and try again.'
+      : errorMsg
 
   return {
     start,
-    stop: ws.disconnect,
+    stop,
     running,
     steps,
     finalParams,
     finalError,
     done,
-    errorMsg,
-    wsStatus: ws.status,
-    retries: ws.retries,
+    errorMsg: connectionError,
+    wsStatus: status,
+    retries,
   }
 }

@@ -7,6 +7,10 @@
     color-scheme: dark;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
   html,
   body,
   #root {
@@ -16,6 +20,25 @@
   body {
     @apply bg-base text-ink antialiased;
     font-feature-settings: 'tnum' 1; /* tabular numerals for aligned figures */
+    min-width: 320px;
+    background-image:
+      radial-gradient(circle at 15% -10%, rgb(56 189 248 / 0.07), transparent 30rem),
+      radial-gradient(circle at 90% 0%, rgb(167 139 250 / 0.05), transparent 26rem);
+    background-attachment: fixed;
+  }
+
+  button,
+  a,
+  input {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base;
+  }
+
+  button {
+    touch-action: manipulation;
+  }
+
+  ::selection {
+    @apply bg-sky-400/30 text-white;
   }
 
   /* Thin dark scrollbars to match the terminal aesthetic. */
@@ -40,5 +63,26 @@
   }
   .stat-label {
     @apply text-xs uppercase tracking-wider text-muted;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

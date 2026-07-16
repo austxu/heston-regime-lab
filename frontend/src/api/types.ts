@@ -13,17 +13,18 @@ export interface HealthResponse {
   status: string
   version: string
   cache_backend: string
+  cache_healthy: boolean
+  redis_configured: boolean
   redis_healthy: boolean
   regime_model_ready: boolean
   time: string
 }
 
-export interface HestonParams {
-  kappa: number
-  theta: number
-  sigma: number
-  rho: number
-  v0: number
+export const PARAM_NAMES = ['kappa', 'theta', 'sigma', 'rho', 'v0'] as const
+export type ParamName = (typeof PARAM_NAMES)[number]
+export type HestonParamValues = Record<ParamName, number>
+
+export interface HestonParams extends HestonParamValues {
   feller: boolean
 }
 
@@ -114,15 +115,22 @@ export interface RegimeParametersResponse {
   provenance: Provenance
 }
 
-// One frame on /ws/calibration.
-export interface CalibrationStreamMessage {
-  type: 'progress' | 'done' | 'error'
-  iteration?: number
-  loss?: number
-  params?: Record<string, number>
-  mean_iv_error?: number
-  message?: string
-}
-
-export type ParamName = 'kappa' | 'theta' | 'sigma' | 'rho' | 'v0'
-export const PARAM_NAMES: ParamName[] = ['kappa', 'theta', 'sigma', 'rho', 'v0']
+// Discriminated frames emitted by /ws/calibration.
+export type CalibrationStreamMessage =
+  | {
+      type: 'progress'
+      iteration: number
+      loss: number
+      params: HestonParamValues
+    }
+  | {
+      type: 'done'
+      iteration?: number
+      params?: HestonParamValues
+      mean_iv_error?: number
+      message?: string
+    }
+  | {
+      type: 'error'
+      message?: string
+    }

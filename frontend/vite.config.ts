@@ -8,6 +8,9 @@ const API_TARGET = process.env.VITE_API_TARGET ?? 'http://localhost:8000'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Plotly's CommonJS trace modules still reference Node's `global`; in browsers the
+  // standards-based equivalent is `globalThis`.
+  define: { global: 'globalThis' },
   server: {
     port: 5173,
     proxy: {

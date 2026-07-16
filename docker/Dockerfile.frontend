@@ -9,18 +9,21 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-# In Compose, leave VITE_API_BASE empty so the bundle uses relative URLs and nginx proxies
-# to the `api` service. On Railway (separate service URLs) set this build arg to the API's
-# public URL so the SPA calls it directly (cross-origin; the API allows it via CORS_ORIGINS).
+# Leave VITE_API_BASE empty for Compose and the recommended Railway topology: nginx then
+# proxies same-origin requests to API_HOST/API_PORT (Railway private DNS in production).
+# Set it only for the optional split-origin deployment documented in DEPLOY.md.
 ARG VITE_API_BASE=""
 ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.30.3-alpine3.23
 ENV API_HOST=127.0.0.1
+ENV API_PORT=8000
+ENV DNS_RESOLVER=127.0.0.11
+ENV TRUST_UPSTREAM_PROXY=0
 ENV PORT=80
 COPY docker/nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:${PORT}/ >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://localhost:${PORT}/health >/dev/null 2>&1 || exit 1
