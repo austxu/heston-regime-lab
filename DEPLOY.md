@@ -97,15 +97,17 @@ healthy, verify the public frontend domain:
 
 ```bash
 curl -fsS https://YOUR-FRONTEND-DOMAIN/health
+curl -fsS https://YOUR-FRONTEND-DOMAIN/api-health
 curl -fsS 'https://YOUR-FRONTEND-DOMAIN/api/regime/current?live=false'
 ```
 
 Open the dashboard and confirm the API status is connected, switch between Live and
 Synthetic modes, and run one calibration to verify the WebSocket path. Railway health
-checks gate a new deployment before traffic moves to it; the frontend check uses its
-proxied `/health` route so a broken private API connection cannot deploy green. These are
-startup checks, not continuous monitoring. Add an external uptime monitor for ongoing availability. See
-[Railway health checks](https://docs.railway.com/deployments/healthchecks).
+checks gate a new deployment before traffic moves to it. The frontend `/health` endpoint
+checks nginx liveness without coupling its deployment to the separately deployed API;
+`/api-health` and the dashboard status pill check actual FastAPI readiness. These are
+startup checks, not continuous monitoring. Add an external uptime monitor for ongoing
+availability. See [Railway health checks](https://docs.railway.com/deployments/healthchecks).
 
 ## CI/CD
 

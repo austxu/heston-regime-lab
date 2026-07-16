@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { buildCalibrationWsUrl } from './client'
+import { buildCalibrationWsUrl, healthPath } from './client'
+
+describe('healthPath', () => {
+  it('uses the API-readiness proxy for same-origin deployments', () => {
+    expect(healthPath('')).toBe('/api-health')
+    expect(healthPath('   ')).toBe('/api-health')
+  })
+
+  it('uses FastAPI health directly for a configured cross-origin API', () => {
+    expect(healthPath('https://api.example.test')).toBe('/health')
+  })
+})
 
 describe('buildCalibrationWsUrl', () => {
   it('uses the current secure origin when no API base is configured', () => {

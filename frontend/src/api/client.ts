@@ -56,7 +56,10 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
 const live = (preferLive: boolean) => (preferLive ? '' : '?live=false')
 
 export const api = {
-  health: (signal?: AbortSignal) => getJSON<HealthResponse>('/health', signal),
+  // In same-origin deployments nginx keeps `/health` as its own liveness probe and
+  // exposes FastAPI health at `/api-health`. A configured cross-origin API base points
+  // directly at FastAPI, where the endpoint remains `/health`.
+  health: (signal?: AbortSignal) => getJSON<HealthResponse>(healthPath(API_BASE), signal),
 
   calibration: (preferLive = true, signal?: AbortSignal) =>
     getJSON<CalibrationResponse>(`/api/calibration/run${live(preferLive)}`, signal),
@@ -111,6 +114,10 @@ export const api = {
       )
     }
   },
+}
+
+export function healthPath(apiBase: string): '/health' | '/api-health' {
+  return apiBase.trim() ? '/health' : '/api-health'
 }
 
 /** Build the WebSocket URL for the calibration stream, honouring API_BASE. */
