@@ -1,5 +1,11 @@
 # Deployment (Railway)
 
+> **Render staging cutover:** the portfolio deployment manifest now defines a separate
+> Render Free FastAPI service for this repository. It uses `docker/Dockerfile.api`,
+> `HRL_OFFLINE=1`, and exact `CORS_ORIGINS` for `staging.heston.austxu.dev` plus the
+> future production dashboard origin. Railway remains the rollback path during the
+> observation window.
+
 The recommended production topology exposes only the nginx frontend. nginx forwards
 `/api`, `/health`, and `/ws` to FastAPI over Railway's private network; the API reaches
 managed Redis privately as well. This keeps browser traffic same-origin and avoids making
