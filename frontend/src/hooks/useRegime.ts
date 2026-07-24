@@ -5,13 +5,19 @@ import type {
   RegimeHistoryResponse,
   RegimeParametersResponse,
 } from '../api/types'
+import { demoData } from '../demo'
 import { useDataMode } from '../lib/dataModeContext'
 
 export function useRegimeCurrent() {
   const { preferLive } = useDataMode()
   return useQuery<RegimeCurrentResponse, Error>({
     queryKey: ['regime-current', preferLive],
-    queryFn: ({ signal }) => api.regimeCurrent(preferLive, signal),
+    queryFn: ({ signal }) =>
+      preferLive ? api.regimeCurrent(true, signal) : Promise.resolve(demoData.current),
+    initialData: demoData.current,
+    initialDataUpdatedAt: preferLive ? 0 : undefined,
+    staleTime: preferLive ? 0 : Infinity,
+    refetchOnMount: preferLive ? 'always' : false,
     refetchInterval: 60_000,
   })
 }
@@ -20,7 +26,14 @@ export function useRegimeHistory(downsample = 5) {
   const { preferLive } = useDataMode()
   return useQuery<RegimeHistoryResponse, Error>({
     queryKey: ['regime-history', preferLive, downsample],
-    queryFn: ({ signal }) => api.regimeHistory(preferLive, downsample, signal),
+    queryFn: ({ signal }) =>
+      preferLive
+        ? api.regimeHistory(true, downsample, signal)
+        : Promise.resolve(demoData.history),
+    initialData: demoData.history,
+    initialDataUpdatedAt: preferLive ? 0 : undefined,
+    staleTime: preferLive ? 0 : Infinity,
+    refetchOnMount: preferLive ? 'always' : false,
   })
 }
 
@@ -30,15 +43,20 @@ export function useRegimeHistory(downsample = 5) {
  * is carried as `AnalysisPendingError` and rendered as "computing" rather than an error.
  */
 export function useRegimeParameters(enabled = true) {
+  const { preferLive } = useDataMode()
   return useQuery<RegimeParametersResponse, Error>({
-    queryKey: ['regime-parameters'],
-    queryFn: ({ signal }) => api.regimeParameters(signal),
+    queryKey: ['regime-parameters', preferLive],
+    queryFn: ({ signal }) =>
+      preferLive ? api.regimeParameters(true, signal) : Promise.resolve(demoData.parameters),
     enabled,
+    initialData: demoData.parameters,
+    initialDataUpdatedAt: preferLive ? 0 : undefined,
+    staleTime: preferLive ? 0 : Infinity,
+    refetchOnMount: preferLive ? 'always' : false,
     refetchInterval: (query) =>
       (!!query.state.error && query.state.error instanceof AnalysisPendingError) || !query.state.data
         ? 4_000
         : false,
     retry: false,
-    staleTime: Infinity,
   })
 }

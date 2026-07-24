@@ -19,7 +19,7 @@ export function RegimeDashboardView() {
     <div className="space-y-4">
       <Card
         title="Current Regime"
-        right={current.data && <StalenessIndicator provenance={current.data.provenance} />}
+        right={current.data && <StalenessIndicator provenance={current.data.provenance} refreshing={current.isFetching} />}
       >
         <QueryState query={current} skeleton={<RowsSkeleton rows={3} />}>
           {(data) => <CurrentRegimeCard data={data} />}
@@ -29,7 +29,7 @@ export function RegimeDashboardView() {
       <Card
         title="SPX Price with Regime Overlay"
         subtitle="20y history; background bands show the HMM-decoded regime."
-        right={history.data && <StalenessIndicator provenance={history.data.provenance} />}
+        right={history.data && <StalenessIndicator provenance={history.data.provenance} refreshing={history.isFetching} />}
       >
         <QueryState query={history} skeleton={<ChartSkeleton height={380} />}>
           {(data) => <RegimeHistoryChart data={data} />}

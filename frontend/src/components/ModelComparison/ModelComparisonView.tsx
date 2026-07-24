@@ -15,7 +15,7 @@ export function ModelComparisonView() {
       <Card
         title="Pricing Model Comparison"
         subtitle="Mean absolute implied-vol error: flat Black-Scholes vs calibrated Heston vs Heston with a learned residual correction."
-        right={query.data && <StalenessIndicator provenance={query.data.provenance} />}
+        right={query.data && <StalenessIndicator provenance={query.data.provenance} refreshing={query.isFetching} />}
       >
         <QueryState query={query} skeleton={<RowsSkeleton rows={4} />}>
           {(data) => <Summary data={data} />}

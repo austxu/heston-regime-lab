@@ -14,13 +14,13 @@ export function VolSurfaceView() {
   return (
     <div className="space-y-4">
       <QueryState query={query} skeleton={<ChartSkeleton height={460} />}>
-        {(data) => <SurfaceContent data={data} />}
+        {(data) => <SurfaceContent data={data} refreshing={query.isFetching} />}
       </QueryState>
     </div>
   )
 }
 
-function SurfaceContent({ data }: { data: SurfaceResponse }) {
+function SurfaceContent({ data, refreshing }: { data: SurfaceResponse; refreshing: boolean }) {
   const { moneyness, maturities } = data
   const mMin = moneyness[0] ?? 0
   const mMax = moneyness[moneyness.length - 1] ?? 1
@@ -54,7 +54,7 @@ function SurfaceContent({ data }: { data: SurfaceResponse }) {
       <Card
         title="Implied Volatility Surface — Market vs Heston"
         subtitle="Calibrated Heston surface beside the market surface; rotate to inspect the smile/term structure."
-        right={<StalenessIndicator provenance={data.provenance} />}
+        right={<StalenessIndicator provenance={data.provenance} refreshing={refreshing} />}
       >
         <div className="mb-4 flex flex-wrap gap-6">
           <RangeFilter

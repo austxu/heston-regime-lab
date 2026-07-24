@@ -13,8 +13,8 @@ import type { WsStatus } from '../../hooks/useWebSocket'
 export function CalibrationPanelView() {
   const cal = useCalibration()
   const latest = cal.steps.length ? cal.steps[cal.steps.length - 1].params : null
-  const displayParams = cal.finalParams ?? latest
-  const displayError = cal.finalError
+  const displayParams = cal.finalParams ?? latest ?? cal.preview.params
+  const displayError = cal.finalError ?? cal.preview.mean_iv_error
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -36,7 +36,7 @@ export function CalibrationPanelView() {
               className="rounded-lg bg-sky-500/90 px-4 py-2 text-sm font-medium text-base
                          transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {cal.running ? 'Calibrating…' : 'Run Calibration'}
+              {cal.running ? 'Refining live…' : cal.done ? 'Run Again' : 'Run Live Calibration'}
             </button>
             {cal.running && (
               <button
@@ -59,8 +59,8 @@ export function CalibrationPanelView() {
             </div>
           )}
 
-          {cal.steps.length === 0 && !cal.running ? (
-            <EmptyState />
+          {cal.steps.length === 0 ? (
+            cal.running ? <PreviewStreamingState /> : <EmptyState />
           ) : (
             <LossChart steps={cal.steps} />
           )}
@@ -81,7 +81,7 @@ export function CalibrationPanelView() {
 
       <div className="space-y-4">
         <Card title="Result">
-          <ParameterCard params={displayParams} meanError={displayError} live={cal.running} />
+          <ParameterCard params={displayParams} meanError={displayError} live={cal.running && cal.steps.length > 0} />
         </Card>
       </div>
     </div>
@@ -95,6 +95,16 @@ function EmptyState() {
       <p className="mt-1 text-xs text-muted/70">
         Press <span className="text-ink">Run Calibration</span> to stream live convergence.
       </p>
+    </div>
+  )
+}
+
+function PreviewStreamingState() {
+  return (
+    <div className="flex h-[300px] flex-col items-center justify-center rounded-lg border border-dashed border-edge text-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-edge border-t-accent" aria-hidden="true" />
+      <p className="mt-3 text-sm text-ink">Showing the cached demo fit while live calibration starts…</p>
+      <p className="mt-1 text-xs text-muted">The convergence chart will appear with the first optimizer step.</p>
     </div>
   )
 }

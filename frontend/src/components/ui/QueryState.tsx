@@ -23,8 +23,13 @@ export function QueryState<T>({
   if (query.data !== undefined) {
     return (
       <>
+        {query.error instanceof AnalysisPendingError && pendingMessage && (
+          <PendingNotice message={pendingMessage} />
+        )}
         {query.isError && showBackgroundError && (
-          <RefreshWarning message={query.error.message} onRetry={() => void query.refetch()} />
+          !(query.error instanceof AnalysisPendingError && pendingMessage) && (
+            <RefreshWarning message={query.error.message} onRetry={() => void query.refetch()} />
+          )
         )}
         {children(query.data)}
       </>

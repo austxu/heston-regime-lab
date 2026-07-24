@@ -7,11 +7,12 @@ import { Badge } from './Badge'
  * or synthetic, when it was last fetched, and whether it is being served stale after a
  * failed refresh.
  */
-export function StalenessIndicator({ provenance }: { provenance?: Provenance }) {
+export function StalenessIndicator({ provenance, refreshing = false }: { provenance?: Provenance; refreshing?: boolean }) {
   if (!provenance) return null
+  const isDemo = provenance.source === 'demo'
   const fetched = provenance.cached_at ?? provenance.as_of
   const tone = provenance.stale ? 'warn' : provenance.source === 'live' ? 'good' : 'info'
-  const sourceLabel = provenance.source.toUpperCase()
+  const sourceLabel = isDemo ? 'PREVIEW' : provenance.source.toUpperCase()
 
   return (
     <span className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1">
@@ -24,7 +25,7 @@ export function StalenessIndicator({ provenance }: { provenance?: Provenance }) 
         {provenance.stale ? 'STALE' : sourceLabel}
       </Badge>
       <span className="text-xs text-muted" title={fetched ?? ''}>
-        updated {timeAgo(fetched)}
+        {isDemo ? (refreshing ? 'loading live update…' : 'static demo · refreshing live') : `updated ${timeAgo(fetched)}`}
       </span>
     </span>
   )

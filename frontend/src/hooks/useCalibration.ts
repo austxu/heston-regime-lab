@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { calibrationWsUrl } from '../api/client'
-import type { CalibrationStreamMessage, HestonParamValues } from '../api/types'
+import type { CalibrationResponse, CalibrationStreamMessage, HestonParamValues } from '../api/types'
+import { demoData } from '../demo'
 import { useDataMode } from '../lib/dataModeContext'
 import { useWebSocket } from './useWebSocket'
 import type { WsStatus } from './useWebSocket'
@@ -22,6 +23,7 @@ export interface UseCalibrationResult {
   errorMsg: string | null
   wsStatus: WsStatus
   retries: number
+  preview: CalibrationResponse
 }
 
 /**
@@ -40,6 +42,7 @@ export function useCalibration(): UseCalibrationResult {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const completedRef = useRef(false)
   const disconnectRef = useRef<() => void>(() => undefined)
+  const autoStartedRef = useRef(false)
 
   const { connect, disconnect, status, retries } = useWebSocket<CalibrationStreamMessage>({
     onOpen: () => {
@@ -95,8 +98,17 @@ export function useCalibration(): UseCalibrationResult {
     previousModeRef.current = preferLive
     completedRef.current = true
     disconnect()
+    if (!preferLive) autoStartedRef.current = false
     reset()
   }, [disconnect, preferLive, reset])
+
+  // Start the live refinement after the static preview is already visible. StrictMode-safe
+  // because the ref prevents a duplicate socket when React replays mount effects in dev.
+  useEffect(() => {
+    if (!preferLive || autoStartedRef.current) return
+    autoStartedRef.current = true
+    start()
+  }, [preferLive, start])
 
   const running =
     (status === 'open' || status === 'connecting' || status === 'retrying') &&
@@ -119,5 +131,6 @@ export function useCalibration(): UseCalibrationResult {
     errorMsg: connectionError,
     wsStatus: status,
     retries,
+    preview: demoData.calibration,
   }
 }

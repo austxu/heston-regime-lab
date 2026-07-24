@@ -81,10 +81,10 @@ export const api = {
 
   // 202 while the heavy analysis runs in the background -> surfaced as AnalysisPendingError
   // so React Query can keep polling.
-  regimeParameters: async (signal?: AbortSignal): Promise<RegimeParametersResponse> => {
+  regimeParameters: async (preferLive = true, signal?: AbortSignal): Promise<RegimeParametersResponse> => {
     let res: Response
     try {
-      res = await fetch(`${API_BASE}/api/regime/parameters`, {
+      res = await fetch(`${API_BASE}/api/regime/parameters${preferLive ? '' : '?live=false'}`, {
         signal,
         headers: { Accept: 'application/json' },
       })
