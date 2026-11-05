@@ -90,11 +90,6 @@ export function strikeAt(grid: Pick<Grid, 'kind'>, x: number, tau: number, m: Ma
   return m.spot * Math.exp((m.rate - m.div) * tau + x * Math.sqrt(tau))
 }
 
-export function xOfStrike(kind: Grid['kind'], strike: number, tau: number, m: Market): number {
-  if (kind === 'm') return strike / m.spot
-  return (Math.log(strike / m.spot) - (m.rate - m.div) * tau) / Math.sqrt(tau)
-}
-
 export interface SurfaceResult {
   /** Row-major IV, index [i * x.length + j] for tau[i], x[j]. */
   iv: Float64Array

@@ -16,6 +16,9 @@ interface Props {
   hint?: string
   minimal?: boolean
   pad?: { top: number; bottom: number }
+  /** Maturity axis spacing; 'sqrt' gives short expiries room. */
+  tauScale?: 'linear' | 'sqrt'
+  tauTicks?: number[]
 }
 
 const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').matches
@@ -23,6 +26,9 @@ const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').m
 /** The canvas surface plus an HTML hover readout and an accessible description. */
 export function Surface3D(p: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
+  const back = useRef<HTMLCanvasElement>(null)
+  const glc = useRef<HTMLCanvasElement>(null)
+  const [mode, setMode] = useState<'webgl' | 'canvas'>('canvas')
   const r = useRef<SurfaceRenderer | null>(null)
   const reduced = useReducedMotion()
   const [hover, setHover] = useState<HoverInfo | null>(null)
@@ -39,8 +45,11 @@ export function Surface3D(p: Props) {
       reducedMotion: reduced,
       minimal: p.minimal,
       pad: p.pad,
+      tauScale: p.tauScale,
+      tauTicks: p.tauTicks,
     }
-    r.current = new SurfaceRenderer(canvas.current!, opts)
+    r.current = new SurfaceRenderer(canvas.current!, opts, { back: back.current!, gl: glc.current! })
+    setMode(r.current.webgl ? 'webgl' : 'canvas')
     return () => r.current?.destroy()
   }, [])
   useEffect(() => r.current?.setOptions({ xLabel: p.xLabel, xTick: p.xTick, xTicks: p.xTicks }), [p.xLabel, p.xTick, p.xTicks])
@@ -54,7 +63,9 @@ export function Surface3D(p: Props) {
   const tipLeft = hover ? Math.min(hover.px + 14, (canvas.current?.clientWidth ?? 0) - 150) : 0
   const tipTop = hover ? Math.max(8, hover.py - 70) : 0
   return (
-    <div class="surface-wrap">
+    <div class="surface-wrap" data-renderer={mode}>
+      <canvas ref={back} class="surface-layer" aria-hidden="true" />
+      <canvas ref={glc} class="surface-layer" aria-hidden="true" />
       <canvas
         ref={canvas}
         class="surface-canvas"

@@ -96,9 +96,9 @@ export function Paths(props: { params: HestonParams; rate: number; active: boole
       <div class="panel area-fan">
         <div class="panel-head">
           <div>
-            <p class="eyebrow">04 / paths</p>
+            <p class="eyebrow">05 / paths</p>
             <h2 id="paths-title">Monte Carlo: {PATHS.toLocaleString('en-US')} Heston price paths</h2>
-            <p class="panel-sub">Quadratic-exponential scheme (Andersen 2008), daily steps. Bands: 5–95% and 25–75%; right: distribution of S at the horizon.</p>
+            <p class="panel-sub">Quadratic-exponential scheme (Andersen 2008), daily steps. Shading: density of all paths at each date; lines: 25–75% and dashed 5–95%; right: distribution of S at the horizon.</p>
           </div>
           <div class="readouts">
             <div class="readout">
@@ -322,19 +322,50 @@ function drawFan(
   ctx.beginPath()
   ctx.rect(x0, m.top - 2, x1 - x0, H - m.top - m.bottom + 4)
   ctx.clip()
-  const band = (lo: Float64Array, hi: Float64Array, fill: string) => {
-    ctx.beginPath()
-    for (let i = 0; i <= upto; i++) ctx.lineTo(x(res.t[i]), y(hi[i]))
-    for (let i = upto; i >= 0; i--) ctx.lineTo(x(res.t[i]), y(lo[i]))
-    ctx.closePath()
-    ctx.fillStyle = fill
-    ctx.fill()
+  // Density shading: each time step's histogram of all simulated paths, normalised by its
+  // peak so the cone reads as shape, smoothed by the browser's image scaling.
+  const hist = kind === 'price' ? res.sHist : res.vHist
+  const off = document.createElement('canvas')
+  off.width = upto + 1
+  off.height = hist.bins
+  const octx = off.getContext('2d')
+  if (octx) {
+    const img = octx.createImageData(upto + 1, hist.bins)
+    for (let i = 0; i <= upto; i++) {
+      let mx = 0
+      for (let b = 0; b < hist.bins; b++) mx = Math.max(mx, hist.data[i * hist.bins + b])
+      for (let b = 0; b < hist.bins; b++) {
+        const a = mx > 0 ? (hist.data[i * hist.bins + b] / mx) ** 0.55 : 0
+        const o = ((hist.bins - 1 - b) * (upto + 1) + i) * 4
+        img.data[o] = 158
+        img.data[o + 1] = 119
+        img.data[o + 2] = 237
+        img.data[o + 3] = Math.round(a * 150)
+      }
+    }
+    octx.putImageData(img, 0, 0)
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    const X0 = x(res.t[0])
+    const X1 = x(res.t[upto])
+    ctx.drawImage(off, X0, y(hist.hi), Math.max(1, X1 - X0), y(hist.lo) - y(hist.hi))
   }
-  band(q[0], q[4], 'rgba(158,119,237,0.13)')
-  band(q[1], q[3], 'rgba(158,119,237,0.22)')
+  const edge = (v: Float64Array, color: string, dash: number[]) => {
+    ctx.setLineDash(dash)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    for (let i = 0; i <= upto; i++) ctx.lineTo(x(res.t[i]), y(v[i]))
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+  edge(q[0], 'rgba(206,207,210,0.35)', [2, 3])
+  edge(q[4], 'rgba(206,207,210,0.35)', [2, 3])
+  edge(q[1], 'rgba(206,207,210,0.5)', [])
+  edge(q[3], 'rgba(206,207,210,0.5)', [])
   ctx.lineWidth = 0.8
   paths.forEach((path, k) => {
-    ctx.strokeStyle = k === 0 ? 'rgba(240,136,123,0.9)' : 'rgba(247,247,247,0.16)'
+    ctx.strokeStyle = k === 0 ? 'rgba(240,136,123,0.9)' : 'rgba(247,247,247,0.11)'
     ctx.lineWidth = k === 0 ? 1.3 : 0.8
     ctx.beginPath()
     for (let i = 0; i <= upto; i++) {

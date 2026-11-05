@@ -66,3 +66,18 @@ random partitions and keep the best log-likelihood (100% agreement, logL matches
 
 2026-11-05 | A commit was written with a Co-Authored-By trailer | Never add agent attribution
 trailers (Co-Authored-By / Generated-with) to commits or PRs in this repo.
+
+2026-11-05 | Lewis pricing with one Gauss-Legendre panel on [0, 12/(vol sqrt T)] was off by
+~4e-6 in price (2e-3 in IV for short-dated wings) at fitted vol-of-vol ~4: the Heston CF then
+decays exponentially, not like a Gaussian, and the 1/(u^2 + 1/4) kernel needs nodes near 0 |
+Size quadrature from measured |phi(u)| at the fitted parameters, validate against a dense
+multi-panel reference, and keep a dedicated small panel near u = 0 for Lewis.
+
+2026-11-05 | Unconstrained raw SVI on 1-2 week SPX slices put a sharp vertex beyond the last
+quoted call (wing slope ~5), so the extrapolated density integrated to 1.2-1.4 and showed a
+"51% chance of +5%" | Constrain SVI before using it for densities: vertex inside the quotes,
+Lee wing bound, and g(k) >= 0 on the plotted range; check total mass, not just min g.
+
+2026-11-05 | A write to the base checkout path instead of the worktree path was blocked by a
+hook | In worktree sessions always build absolute paths from the worktree root.
+

@@ -80,7 +80,8 @@ export function Regimes(props: {
   error: boolean
   active: boolean
   onPlayground: (p: HestonParams) => void
-  onCalibrate: (k: number) => void
+  /** Heston fitted to the real SPX option snapshot, for comparison with the VIX proxies. */
+  optionFit: { asOf: string; params: HestonParams } | null
 }) {
   const d = props.market
   const [range, setRange] = useState<Range>('all')
@@ -132,7 +133,7 @@ export function Regimes(props: {
       <div class="panel area-history">
         <div class="history-toolbar">
           <div>
-            <p class="eyebrow">03 / regimes</p>
+            <p class="eyebrow">04 / regimes</p>
             <h2 id="reg-title" style={{ margin: '3px 0 0', fontSize: '15px', fontWeight: 600 }}>
               S&amp;P 500 and VIX, shaded by HMM regime
             </h2>
@@ -301,18 +302,33 @@ export function Regimes(props: {
                       <button type="button" class="btn small" onClick={() => props.onPlayground(r.params)} aria-label={`Open ${r.name} parameters in the surface playground`}>
                         surface
                       </button>
-                      <button type="button" class="btn small" onClick={() => props.onCalibrate(k)} aria-label={`Calibrate to a synthetic ${r.name}-regime surface`}>
-                        calibrate
-                      </button>
                     </td>
                   </tr>
                 ))}
+                {props.optionFit && (
+                  <tr class="sel">
+                    <td class="lead">
+                      <span class="dot" style={{ background: 'var(--ember)', marginRight: '6px' }} />
+                      options, {dateLabel(new Date(props.optionFit.asOf)).replace(/ \d{4}$/, "")}
+                    </td>
+                    {PARAM_NAMES.map((n) => (
+                      <td key={n}>{n === 'rho' ? fixed(props.optionFit!.params[n], 3) : num(props.optionFit!.params[n], n === 'theta' || n === 'v0' ? 4 : n === 'sigma' ? 3 : 2)}</td>
+                    ))}
+                    <td style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+                      <button type="button" class="btn small" onClick={() => props.onPlayground(props.optionFit!.params)} aria-label="Open the option-implied Heston fit in the surface playground">
+                        surface
+                      </button>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
           <p class="panel-sub" style={{ marginTop: '8px' }}>
             Estimated offline from real VIX and VIX3M on each regime's days: κ = {num(d.estimation.kappa, 2)} from the pooled term-structure slope (shared), θ and v₀
             from the two tenors, σ from daily variance changes, ρ from their correlation with SPX returns. A proxy, not a calibration to option quotes.
+            The last row is Heston calibrated to the real SPX option snapshot (Market tab): option-implied vol of vol is far higher than the VIX
+            time series suggests, because one factor has to reproduce a steep one-week skew.
           </p>
         </div>
       </div>

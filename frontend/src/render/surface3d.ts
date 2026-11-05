@@ -1,16 +1,19 @@
 /**
- * A dependency-free Canvas-2D 3D surface renderer (no WebGL).
+ * A dependency-free 3D surface renderer: WebGL2 when available, Canvas-2D otherwise.
  *
- * The IV grid is projected with a mild perspective camera, split into quads, sorted back to
- * front (painter's algorithm) and filled with an OKLab colormap modulated by Lambert
- * shading; market quotes are depth-sorted together with the quads so the surface occludes
- * them correctly. Rendering is on demand: frames are scheduled only while something moves
- * (morphing between surfaces, inertia after a drag, auto-rotation).
+ * The IV grid is projected with a mild perspective camera. With WebGL2 (glSurface.ts) the
+ * surface is a refined, smooth-shaded mesh drawn between two canvas-2D layers (walls and
+ * grid behind; labels, hover and colour bar in front). Without it, the grid is split into
+ * quads, sorted back to front (painter's algorithm) and filled with an OKLab colormap
+ * modulated by Lambert shading; market quotes are depth-sorted together with the quads so
+ * the surface occludes them correctly. Rendering is on demand: frames are scheduled only
+ * while something moves (morphing between surfaces, inertia after a drag, auto-rotation).
  */
 import type { Grid } from '../math/surface'
 import { pctTickFormat } from '../lib/format'
 import { ticks } from '../lib/scale'
 import { colorAt } from './colormap'
+import { GlSurface } from './glSurface'
 
 export interface SurfaceData {
   grid: Grid
@@ -42,6 +45,14 @@ export interface RendererOptions {
   /** Attract-mode styling: no tick labels or titles, extra room for an HTML overlay. */
   minimal?: boolean
   pad?: { top: number; bottom: number }
+  /** Maturity axis spacing; 'sqrt' gives short expiries room. */
+  tauScale?: 'linear' | 'sqrt'
+}
+
+/** Optional canvases stacked under the main one for the WebGL path. */
+export interface RendererLayers {
+  back: HTMLCanvasElement
+  gl: HTMLCanvasElement
 }
 
 const BOX_H = 1.15
@@ -103,11 +114,20 @@ export class SurfaceRenderer {
   private disposers: (() => void)[] = []
 
   private canvas: HTMLCanvasElement
+  private layers: RendererLayers | null
+  private gl: GlSurface | null = null
+  private back: CanvasRenderingContext2D | null = null
 
-  constructor(canvas: HTMLCanvasElement, opts: RendererOptions) {
+  constructor(canvas: HTMLCanvasElement, opts: RendererOptions, layers?: RendererLayers) {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')!
     this.opts = opts
+    this.layers = layers ?? null
+    if (layers) {
+      this.gl = GlSurface.create(layers.gl)
+      this.back = this.gl ? layers.back.getContext('2d') : null
+      if (!this.gl || !this.back) this.dropGl()
+    }
     this.ro = new ResizeObserver(() => this.resize())
     this.ro.observe(canvas)
     this.bind()
@@ -162,6 +182,20 @@ export class SurfaceRenderer {
     this.disposers.forEach((d) => d())
   }
 
+  /** True while the WebGL path draws the surface. */
+  get webgl() {
+    return !!this.gl
+  }
+
+  private dropGl() {
+    this.gl = null
+    this.back = null
+    if (this.layers) {
+      this.layers.back.style.display = 'none'
+      this.layers.gl.style.display = 'none'
+    }
+  }
+
   /** Readable description of the current view for assistive tech. */
   get viewAngles() {
     return { yaw: this.yaw, pitch: this.pitch }
@@ -204,6 +238,14 @@ export class SurfaceRenderer {
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width = W
       this.canvas.height = H
+    }
+    if (this.layers && this.gl) {
+      const b = this.layers.back
+      if (b.width !== W || b.height !== H) {
+        b.width = W
+        b.height = H
+      }
+      this.gl.resize(W, H)
     }
     this.requestFrame()
   }
@@ -358,9 +400,10 @@ export class SurfaceRenderer {
   }
   private wy(tau: number) {
     const g = this.grid!
-    const lo = g.tau[0]
-    const hi = g.tau[g.tau.length - 1]
-    return ((tau - lo) / (hi - lo)) * 2 - 1
+    const f = this.opts.tauScale === 'sqrt' ? Math.sqrt : (t: number) => t
+    const lo = f(g.tau[0])
+    const hi = f(g.tau[g.tau.length - 1])
+    return ((f(tau) - lo) / (hi - lo)) * 2 - 1
   }
   private wz(iv: number) {
     return ((iv - this.zLo) / (this.zHi - this.zLo)) * BOX_H
@@ -436,6 +479,11 @@ export class SurfaceRenderer {
     const ctx = this.ctx
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     ctx.clearRect(0, 0, this.w, this.h)
+    if (this.gl?.lost) this.dropGl()
+    if (this.back) {
+      this.back.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+      this.back.clearRect(0, 0, this.w, this.h)
+    }
     if (!this.grid || !this.cur || this.w < 10 || this.h < 10) return
     if (this.fit()) this.requestFrame()
     const g = this.grid
@@ -487,6 +535,33 @@ export class SurfaceRenderer {
     })
     const order = Array.from({ length: Q + P }, (_, i) => i).sort((a, b) => key[a] - key[b])
     this.order = order
+
+    if (this.gl) {
+      const zt = ticks(this.zLo, this.zHi, 4)
+      this.gl.draw(
+        {
+          yaw: this.yaw,
+          pitch: this.pitch,
+          scale: this.scale,
+          cx: this.cx,
+          cy: this.cy,
+          w: this.w,
+          h: this.h,
+          dpr: this.dpr,
+          dist: DIST,
+          boxH: BOX_H,
+          zLo: this.zLo,
+          zHi: this.zHi,
+        },
+        { wx: g.x.map((_, j) => this.gx(j)), wy: wyRow, iv: this.cur, flag: this.flag },
+        this.points.map((pt) => ({ wx: this.wx(pt.x), wy: this.wy(pt.tau), iv: pt.iv, model: pt.model })),
+        zt.length > 1 ? (zt[1] - zt[0]) / 2 : 0.01,
+      )
+      this.drawFrame(false)
+      this.drawHover()
+      this.drawColorbar()
+      return
+    }
 
     // Light fixed relative to the camera: from the upper left, slightly toward the viewer.
     const L = [-0.35, 0.78, 0.52]
@@ -574,7 +649,7 @@ export class SurfaceRenderer {
 
   /** Floor grid + back walls (behind = true) or the front tick labels (behind = false). */
   private drawFrame(behind: boolean) {
-    const ctx = this.ctx
+    const ctx = behind && this.back ? this.back : this.ctx
     const g = this.grid!
     const p = [0, 0, 0]
     const q = [0, 0, 0]
@@ -596,6 +671,7 @@ export class SurfaceRenderer {
     const tHi = g.tau[g.tau.length - 1]
     const xt = this.opts.xTicks(xLo, xHi)
     const tt = (this.opts.tauTicks ?? [0.25, 0.5, 1, 1.5, 2]).filter((t) => t >= tLo - 1e-9 && t <= tHi + 1e-9)
+    const tl = (t: number) => (t < 1 ? `${Math.round(t * 12)}m` : `${t}y`)
     const zt = ticks(this.zLo, this.zHi, 4).filter((z) => z >= this.zLo - 1e-9 && z <= this.zHi + 1e-9)
     // Closeness of wall centres decides which walls are behind the surface.
     const closeAt = (x: number, y: number) => {
@@ -661,7 +737,7 @@ export class SurfaceRenderer {
     for (const x of xt) label(this.wx(x), yOut, 0, this.opts.xTick(x))
     // Maturity labels along the front x edge.
     const xOut = frontX * 1.13
-    for (const t of tt) label(xOut, this.wy(t), 0, t < 1 ? `${Math.round(t * 12)}m` : `${t}y`)
+    for (const t of tt) label(xOut, this.wy(t), 0, tl(t))
     // IV labels on the leftmost vertical edge.
     const corners: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
     let best = corners[0]

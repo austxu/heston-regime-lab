@@ -5,7 +5,8 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776ab?logo=python&logoColor=white)
 ![Preact](https://img.shields.io/badge/preact-10-673ab8?logo=preact&logoColor=white)
 
-Stochastic-volatility research lab: calibrate the **Heston** model, detect market
+Stochastic-volatility research lab: calibrate **Heston**, **Bates** and **double Heston**
+to a real S&P 500 option chain, read the risk-neutral densities it implies, detect market
 **regimes** with a hidden Markov model, and study how Heston parameters change across
 regimes. The Python package holds the research code and an optional FastAPI service; the
 public demo is a **fully static browser lab** that runs a TypeScript port of the same math.
@@ -19,14 +20,17 @@ attract loop that rotates the surface and sweeps parameters until the visitor in
 ```mermaid
 flowchart LR
   subgraph offline["Offline (Python, this repo)"]
-    FRED["FRED CSV · SP500, VIXCLS,<br/>VXVCLS, DGS3MO"] --> BAKE["scripts/bake_market_data.py<br/>features → 3-state HMM →<br/>regime Heston params →<br/>L-BFGS-B reference fits"]
+    FRED["FRED CSV · SP500, VIXCLS,<br/>VXVCLS, DGS3MO"] --> BAKE["scripts/bake_market_data.py<br/>features → 3-state HMM →<br/>regime Heston params"]
+    CBOE["Cboe delayed SPX chain"] --> BAKEO["scripts/bake_spx_options.py<br/>parity forwards → OTM filter →<br/>bid/mid/ask IVs → SVI, Heston,<br/>Bates, double Heston fits"]
     PY["models/ + calibration/"] --> FIX["scripts/make_parity_fixtures.py"]
   end
   BAKE --> JSON[("frontend/src/data/market.json")]
+  BAKEO --> SPX[("frontend/src/data/spx.json")]
+  SPX --> UI
   FIX --> TESTS["vitest parity suite"]
   subgraph browser["Static lab (frontend/, Cloudflare Pages)"]
-    JSON --> UI["Preact views · SVG charts ·<br/>canvas-2D 3D surface"]
-    UI <--> W["Web Worker: TS Heston core<br/>pricing · LM calibration ·<br/>QE Monte Carlo · Baum–Welch"]
+    JSON --> UI["Preact views · SVG charts ·<br/>WebGL2 surface (canvas-2D fallback)"]
+    UI <--> W["Web Worker: TS model core<br/>Lewis / Gil-Pelaez pricing · LM fits ·<br/>densities · QE Monte Carlo · Baum–Welch"]
   end
   TESTS -. verifies .-> W
   API["FastAPI service (optional)"] -.- PY
@@ -40,29 +44,57 @@ flowchart LR
   characteristic-function values agree to ~1e-14 (relative), prices to ~1e-11 and implied
   vols to ~1e-9. The synthetic round trip recovers the ground truth within 1%. On every
   regime surface LM reaches the same optimum as L-BFGS-B (parameters within ~5e-5 relative)
-  in 7–9 iterations, against ~30.
-- **Real data, baked at build time.** Daily S&P 500, VIX, VIX3M and 3-month T-bill
+  in 7–9 iterations, against ~30. For the real-market models the port matches numpy to
+  ~1e-15 (characteristic functions), ~3e-14 (Lewis prices), ~7e-12 (implied vols) and
+  ~1e-13 (densities), and on the SPX snapshot the browser LM reaches scipy's optimum for all
+  three models (Heston in ~0.3 s, Bates ~1.7 s, double Heston ~1.2 s).
+- **Real option quotes.** `scripts/bake_spx_options.py` (`make bake-options`) reads Cboe's
+  public delayed SPX/SPXW chain, fits put–call parity per expiry for the forward and
+  discount factor, keeps two-sided OTM quotes with spreads under 35% of mid, thins to 21
+  strikes on each of 12 expiries (one week to two years) and stores bid/mid/ask Black
+  implied vols. Only derived values are committed (`frontend/src/data/spx.json`, 18 KB),
+  with the quote timestamp. The current snapshot is the 5 Nov 2026 close (SPX −4.4% that day).
+- **More models, honestly compared** (`calibration/market.py`, `models/bates.py`,
+  `models/double_heston.py`, `models/svi.py`, `models/fourier.py`). Forward-normalised
+  Lewis (2001) pricing on a three-panel Gauss–Legendre rule sized per expiry (accurate to
+  ~1e-11 in implied vol even at the vol-of-vol of 4–6 real fits need). On the snapshot's 252
+  quotes (RMSE of mid IVs, share of model IVs inside the bid–ask):
+
+  | model | params | RMSE, vol pts | inside bid–ask | ≤ 1 month | ≥ 1 year |
+  |---|---|---|---|---|---|
+  | Black–Scholes, ATM vol per expiry | 12 | 10.29 | — | — | — |
+  | Heston | 5 | 1.07 | 12% | 1.61 | 1.02 |
+  | Bates (Heston + Merton jumps) | 8 | 0.98 | 11% | 1.55 | 0.81 |
+  | Double Heston | 10 | **0.46** | 31% | 0.67 | 0.22 |
+  | SVI per expiry, arbitrage-constrained | 60 | 0.22 | 38% | — | — |
+
+  A second variance factor cuts Heston's error 2.3×; Merton jumps barely help on this
+  snapshot (the jump fit degenerates to frequent small jumps at its λ bound). SVI is a
+  smoothing benchmark with no dynamics, constrained so its densities are real densities
+  (vertex inside the quotes, Lee's wing bound, g(k) ≥ 0).
+- **Risk-neutral densities.** Breeden–Litzenberger from the SVI slices and from raw quote
+  butterflies, against each model's Fourier-inverted density; implied skewness and
+  kurtosis term structures and tail probabilities.
+- **History data, baked at build time.** Daily S&P 500, VIX, VIX3M and 3-month T-bill
   history from FRED. The repo's HMM (`models/hmm.py`, `data/features.py`) is fitted
   offline. Regime-conditional Heston parameters come from the VIX term structure and VIX
-  dynamics on each regime's days. The JSON (~175 KB) records its as-of date.
-- **Synthetic option quotes, labelled as such.** Free historical SPX option chains are not
-  available, so each regime's calibration target is generated from that regime's
-  parameters plus 0.3 vol-point Gaussian noise (the `analysis/regime_analysis.py`
-  approach). The same quotes are calibrated offline with the Python optimiser so the
-  browser fit can be compared with it on identical inputs.
-- **No WebGL.** The 3D surface is a canvas-2D renderer: painter's-sorted quads, OKLab
-  colormap, Lambert shading, drag-to-rotate with inertia, hover readout and morphing
-  between surfaces.
+  dynamics on each regime's days (a proxy, compared in the UI with the option-implied fit).
+- **Graphics without libraries.** A WebGL2 surface (Catmull-Rom-refined mesh, Blinn-Phong
+  lighting, analytic grid lines, a projected IV contour map on the floor, depth-tested
+  quotes with residual stems) layered between canvas-2D axes and labels; the original
+  canvas-2D painter is the fallback when WebGL2 is unavailable or the context is lost.
+  Monte Carlo fans are shaded by the per-date density of all simulated paths.
 
 ### Browser lab views
 
 | Tab | What it does |
 |---|---|
 | 01 Surface | Sliders for κ, θ, σ, ρ, v₀, r reprice the whole surface in a worker (draft then fine). Shows a Feller indicator, smile slices, ATM term structure and a plain-language note for each parameter. |
-| 02 Calibration | Pick the calm, normal or stressed regime. LM calibration streams from the worker and is replayed as the surface converges onto the quotes. Shows RMSE on a log axis, parameter paths, and a fit table against Python and flat Black-Scholes. |
-| 03 Regimes | SPX (log) and VIX with HMM regime shading, a crosshair readout, a posterior strip, per-regime stats, the transition matrix and regime Heston parameters. K = 2 and K = 4 refit in the browser. |
-| 04 Paths | Heston QE Monte Carlo fan charts for price and volatility, the terminal distribution against a lognormal, and martingale and MC-vs-Fourier sanity checks. |
-| 05 Model | Explainer with MathML equations, parity numbers and data provenance. |
+| 02 Market | Heston, Bates or double Heston on the real SPX snapshot: the offline scipy fit, or a live LM calibration replayed iteration by iteration. 3D surface with quotes and residual stems, bid–ask smiles per expiry, fit error by expiry, a residual heat map in half-spreads and the model comparison table. |
+| 03 Density | Risk-neutral densities per expiry (market via SVI, raw butterflies, each model, lognormal), linear or log scale, tail probabilities, and implied skewness / kurtosis term structures. |
+| 04 Regimes | SPX (log) and VIX with HMM regime shading, a crosshair readout, a posterior strip, per-regime stats, the transition matrix and regime Heston parameters next to the option-implied fit. K = 2 and K = 4 refit in the browser. |
+| 05 Paths | Heston QE Monte Carlo fan charts for price and volatility, shaded by path density, the terminal distribution against a lognormal, and martingale and MC-vs-Fourier sanity checks. |
+| 06 Model | Explainer with MathML equations, parity numbers and data provenance. |
 
 ## Research code
 
@@ -109,6 +141,7 @@ npm run build                                   # typecheck + production build -
 
 # Refresh the baked market data (network) and the parity fixtures:
 HRL_OFFLINE=1 python -m scripts.bake_market_data      # -> frontend/src/data/market.json
+python -m scripts.bake_spx_options                    # -> frontend/src/data/spx.json (Cboe)
 HRL_OFFLINE=1 python -m scripts.make_parity_fixtures  # -> frontend/src/math/__fixtures__/
 ```
 
@@ -130,21 +163,29 @@ checks, including both regression suites.
 models/heston.py            Heston char. function + Gil-Pelaez pricing (Gauss-Legendre)
 models/black_scholes.py     Black-Scholes pricing + implied-vol inversion (Brent)
 models/hmm.py               Gaussian HMM (3 states) + vol-ordered regime labels
+models/fourier.py           forward-normalised Lewis pricing, densities, composite quadrature
+models/bates.py             Bates (Heston + Merton jumps) characteristic function
+models/double_heston.py     two-factor Heston characteristic function
+models/svi.py               raw SVI, Gatheral g(k), density, arbitrage-constrained fit
 calibration/optimizer.py    L-BFGS-B calibration (+ per-iteration streaming callback)
+calibration/market.py       Heston / Bates / double Heston fits to a real snapshot
 calibration/validators.py   synthetic data generation + round-trip validation
 data/fetchers.py            yfinance/FRED fetchers + deterministic synthetic fallback
 data/features.py            realized vol, VIX level/slope, return skew, volume ratio
+data/cboe.py                Cboe chain -> parity forwards -> filtered bid/mid/ask IVs
 analysis/pricing_comparison.py  BS vs Heston vs XGBoost residual correction
 analysis/regime_analysis.py     Kruskal-Wallis + static-vs-regime-conditional calibration
 api/                        FastAPI app: routes, services, cache, websocket, schemas,
                             ratelimit, logging_config (gzip/CORS/Sentry in main.py)
 frontend/                   static browser lab (Preact + Vite + TS, no runtime deps beyond Preact)
-  src/math/                 TS port: heston, black_scholes, calibrate (LM), surface, hmm, montecarlo
+  src/math/                 TS port: heston, black_scholes, lm, calibrate, fourier, models
+                            (Bates, double Heston), market, svi, surface, hmm, montecarlo
   src/worker/               Web Worker running all numerics + latest-wins client
-  src/render/               canvas-2D 3D surface renderer + OKLab colormap
-  src/views/                Surface, Calibration, Regimes, Paths, Model
-  src/data/market.json      baked FRED history, HMM regimes, regime params, reference fits
-scripts/                    bake_market_data.py, make_parity_fixtures.py
+  src/render/               3D surface: WebGL2 layer (glSurface.ts) + canvas-2D renderer/fallback
+  src/views/                Surface, Market, Density, Regimes, Paths, Model
+  src/data/market.json      baked FRED history, HMM regimes, regime params
+  src/data/spx.json         baked SPX option snapshot (derived IVs) + reference fits
+scripts/                    bake_market_data.py, bake_spx_options.py, make_parity_fixtures.py
 visualization/plots.py      diagnostic charts -> docs/assets/ (README figures)
 docker/                     Dockerfile.api, Dockerfile.frontend, nginx.conf
 docker-compose.yml          frontend + api + redis stack

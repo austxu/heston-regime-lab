@@ -2,8 +2,8 @@ import { useEffect, useState } from 'preact/hooks'
 import { dateLabel } from './lib/format'
 import { flags } from './lib/hooks'
 import { loadMarket, type MarketData } from './lib/market'
+import { loadSpx, type SpxData } from './lib/spx'
 import type { HestonParams } from './math/types'
-import { Calibration } from './views/Calibration'
 import { Model } from './views/Model'
 import { Paths } from './views/Paths'
 import { Playground, TEXTBOOK, type PlaygroundState } from './views/Playground'
@@ -11,15 +11,18 @@ import { Regimes } from './views/Regimes'
 
 const TABS = [
   { id: 'surface', n: '01', label: 'Surface' },
-  { id: 'calibration', n: '02', label: 'Calibration' },
-  { id: 'regimes', n: '03', label: 'Regimes' },
-  { id: 'paths', n: '04', label: 'Paths' },
-  { id: 'model', n: '05', label: 'Model' },
+  { id: 'market', n: '02', label: 'Market' },
+  { id: 'density', n: '03', label: 'Density' },
+  { id: 'regimes', n: '04', label: 'Regimes' },
+  { id: 'paths', n: '05', label: 'Paths' },
+  { id: 'model', n: '06', label: 'Model' },
 ] as const
 type TabId = (typeof TABS)[number]['id']
 
 const fromHash = (): TabId => {
   const h = location.hash.replace('#', '')
+  // The synthetic-surface calibration tab became the real-market fit.
+  if (h === 'calibration') return 'market'
   return (TABS.find((t) => t.id === h)?.id ?? 'surface') as TabId
 }
 
@@ -28,9 +31,11 @@ export function App() {
   const [visited, setVisited] = useState<Set<TabId>>(() => new Set([fromHash()]))
   const [market, setMarket] = useState<MarketData | null>(null)
   const [marketError, setMarketError] = useState(false)
+  const [spx, setSpx] = useState<SpxData | null>(null)
+  const [spxError, setSpxError] = useState(false)
+  const [mv, setMv] = useState<typeof import('./views/marketViews') | null>(null)
   const [pg, setPg] = useState<PlaygroundState>({ params: TEXTBOOK, rate: 0.04 })
   const [attract, setAttract] = useState(flags.embed && flags.autoplay)
-  const [calibRegime, setCalibRegime] = useState<number | null>(null)
 
   useEffect(() => {
     loadMarket()
@@ -40,6 +45,12 @@ export function App() {
       })
       .catch(() => setMarketError(true))
   }, [])
+  // The option snapshot (its own lazy chunk) is not needed by the attract loop.
+  useEffect(() => {
+    if (attract || spx) return
+    loadSpx().then(setSpx).catch(() => setSpxError(true))
+    import('./views/marketViews').then(setMv).catch(() => setSpxError(true))
+  }, [attract])
 
   useEffect(() => {
     const on = () => go(fromHash(), false)
@@ -62,11 +73,7 @@ export function App() {
     go('surface')
     window.scrollTo({ top: 0 })
   }
-  const openCalibration = (k: number) => {
-    setCalibRegime(k)
-    go('calibration')
-    window.scrollTo({ top: 0 })
-  }
+  const optionFit = spx ? { asOf: spx.asOf, params: spx.fits.heston.params as unknown as HestonParams } : null
 
   if (attract) {
     return <Playground state={pg} setState={setPg} market={market} attract onInteract={() => setAttract(false)} />
@@ -99,7 +106,7 @@ export function App() {
               Heston Regime Lab <span>/ austxu.dev</span>
             </a>
             <nav class="topbar-meta" aria-label="External links">
-              <span class="hide-sm">{market ? `data through ${dateLabel(new Date(`${market.asOf}T00:00:00Z`))}` : 'loading data…'}</span>
+              <span class="hide-sm">{spx ? `options as of ${dateLabel(new Date(spx.asOf))}` : market ? `history through ${dateLabel(new Date(`${market.asOf}T00:00:00Z`))}` : 'loading data…'}</span>
               <a href="https://github.com/austxu/heston-regime-lab" target="_blank" rel="noreferrer">
                 source ↗
               </a>
@@ -109,26 +116,27 @@ export function App() {
             <div>
               <p class="eyebrow">stochastic volatility · research instrument</p>
               <h1>
-                The Heston model, <em>priced live</em> in your browser.
+                Stochastic volatility, <em>fitted live</em> to real SPX options.
               </h1>
             </div>
             <div>
               <p>
-                Shape an implied-volatility surface, watch a calibration converge, and see how market regimes fitted to a decade of S&amp;P
-                500 and VIX history map to model parameters. Every number is computed on this page by a TypeScript port of the Python research code.
+                Calibrate Heston, Bates and a two-factor Heston to a real S&amp;P 500 option chain, read the crash risk priced into it, and see how
+                regimes in a decade of index and VIX history map to model parameters. Every number is computed on this page by a TypeScript port of
+                the Python research code.
               </p>
               <div class="provenance">
+                <span class="chip real">
+                  <i />
+                  real: SPX option quotes (Cboe, delayed)
+                </span>
                 <span class="chip real">
                   <i />
                   real: SPX, VIX, rates (FRED)
                 </span>
                 <span class="chip model">
                   <i />
-                  fitted: HMM regimes
-                </span>
-                <span class="chip synth">
-                  <i />
-                  synthetic: option quotes
+                  fitted: models, SVI, HMM regimes
                 </span>
               </div>
             </div>
@@ -154,17 +162,18 @@ export function App() {
           </button>
         ))}
         <span class="tabs-spacer" />
-        {flags.embed && market && <span class="asof">FRED data through {market.asOf}</span>}
+        {flags.embed && market && <span class="asof">{spx ? `options ${spx.asOf.slice(0, 10)} · ` : ''}FRED through {market.asOf}</span>}
       </div>
 
       {TABS.map((t) =>
         visited.has(t.id) ? (
           <div key={t.id} id={`panel-${t.id}`} role="tabpanel" aria-labelledby={`tab-${t.id}`} hidden={tab !== t.id}>
             {t.id === 'surface' && <Playground state={pg} setState={setPg} market={market} />}
-            {t.id === 'calibration' && <Calibration market={market} error={marketError} initialRegime={calibRegime} active={tab === 'calibration'} onUseParams={openInPlayground} />}
-            {t.id === 'regimes' && <Regimes market={market} error={marketError} onPlayground={openInPlayground} onCalibrate={openCalibration} active={tab === 'regimes'} />}
+            {t.id === 'market' && (mv ? <mv.Market spx={spx} error={spxError} active={tab === 'market'} onUseParams={openInPlayground} /> : <div class="panel loading">{spxError ? 'Could not load the SPX option snapshot.' : 'Loading the SPX option snapshot…'}</div>)}
+            {t.id === 'density' && (mv ? <mv.Density spx={spx} error={spxError} active={tab === 'density'} /> : <div class="panel loading">{spxError ? 'Could not load the SPX option snapshot.' : 'Loading the SPX option snapshot…'}</div>)}
+            {t.id === 'regimes' && <Regimes market={market} error={marketError} onPlayground={openInPlayground} optionFit={optionFit} active={tab === 'regimes'} />}
             {t.id === 'paths' && <Paths params={pg.params} rate={pg.rate} active={tab === 'paths'} />}
-            {t.id === 'model' && <Model market={market} />}
+            {t.id === 'model' && <Model market={market} spx={spx} />}
           </div>
         ) : null,
       )}
@@ -172,7 +181,8 @@ export function App() {
       {!flags.embed && (
         <footer class="footer">
           <span>
-            Research demonstration, not investment advice. Option quotes are synthetic; index, VIX and rate history from FRED.
+            Research demonstration, not investment advice. Option data: Cboe delayed quotes{spx ? ` (${spx.asOf.slice(0, 10)})` : ''}, used only as
+            derived implied vols. Index, VIX and rate history: FRED.
           </span>
           <span>
             <a href="https://austxu.dev">austxu.dev</a> · <a href="https://github.com/austxu/heston-regime-lab">github</a>

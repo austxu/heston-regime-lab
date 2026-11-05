@@ -4,10 +4,11 @@
 A stochastic-volatility research lab. Calibrate the Heston model, detect market regimes
 with an HMM, and study how Heston parameters vary across regimes.
 
-**Current status:** the public demo is a **static browser lab** (`frontend/`, branch
-`feature/browser-lab`). It runs a TypeScript port of the math in a Web Worker and reads
-market history baked offline from FRED. The Python package and the FastAPI service are
-intact, but the lab does not call the API.
+**Current status:** the public demo is a **static browser lab** (`frontend/`, live at
+heston.austxu.dev). It runs a TypeScript port of the math in a Web Worker and reads data
+baked offline: FRED history and a real SPX option snapshot (Cboe delayed quotes, stored as
+derived implied vols). Models fitted to the snapshot: Heston, Bates, double Heston, SVI.
+The Python package and the FastAPI service are intact, but the lab does not call the API.
 
 ## 2. Tech Stack
 - Python 3.12 (`.venv` via `uv venv --python 3.12`; system python is 3.14). numpy, scipy,
@@ -21,6 +22,10 @@ intact, but the lab does not call the API.
 models/heston.py          Heston char. function + Gil-Pelaez pricing (Gauss-Legendre)
 models/black_scholes.py   Black-Scholes pricing + implied-vol inversion (Brent)
 models/hmm.py             GaussianHMM(3) regime model, vol-ordered labels, NumPy EM fallback
+models/fourier.py         forward-normalised Lewis pricing + densities; slice_nodes / density_nodes
+models/bates.py, double_heston.py, svi.py   market models (SVI fit is arbitrage-constrained)
+calibration/market.py     MODELS registry (names, bounds, cf), scipy least_squares fits
+data/cboe.py              Cboe chain parsing, settlement times, parity forwards, filters
 calibration/optimizer.py  L-BFGS-B calibration; CalibrationProgress streaming callback
 calibration/validators.py synthetic data generation + round-trip validation
 data/fetchers.py          live yfinance/FRED + synthetic fallback; liquidity filtering;
@@ -40,12 +45,18 @@ frontend/src/math/        TS port: heston (little trap), blackScholes (Cephes nd
                           montecarlo (Andersen QE), rng; *.test.ts = parity + model tests
 frontend/src/math/__fixtures__/parity.json  Python reference values (make fixtures)
 frontend/src/data/market.json  baked FRED SPX/VIX/VIX3M/DGS3MO + HMM regimes + regime params
+frontend/src/data/spx.json     baked SPX option snapshot: per-expiry k, bid/mid/ask IV, F, D,
+                          SVI params, Python reference fits (params, start, rmse, sliceRmse)
+frontend/src/math/__fixtures__/market.json  Python reference values for market.test.ts
+frontend/src/math/        + lm (generic bounded LM), fourier, models, market, svi
 frontend/src/worker/      lab.worker.ts (all numerics), protocol.ts, client.ts (latest-wins)
-frontend/src/render/      surface3d.ts canvas-2D renderer, colormap.ts (OKLab LUT)
-frontend/src/views/       Playground (surface), Calibration, Regimes, Paths, Model
+frontend/src/render/      surface3d.ts (camera, interaction, labels, canvas-2D fallback),
+                          glSurface.ts (WebGL2 layer), colormap.ts (OKLab LUT)
+frontend/src/views/       Playground (surface), Market, Density, Regimes, Paths, Model
 frontend/src/ui/          Slider, Segmented, Surface3D wrapper, SVG axes
 frontend/public/_headers  Cloudflare Pages CSP/caching; og.png + apple-touch-icon.png
 scripts/bake_market_data.py      FRED -> features -> HMM -> regime params -> market.json
+scripts/bake_spx_options.py      Cboe chain -> derived IVs -> SVI + model fits -> spx.json
 scripts/make_parity_fixtures.py  Python reference values for the vitest parity suite
 api/ratelimit.py          per-IP rate limiter (cache-backed) for /api/calibration/run
 api/logging_config.py     JSON log formatter + configure_logging()
@@ -75,8 +86,12 @@ calibrate stream, paths, hmm) -> SVG charts / canvas surface. No network calls a
 - Lab: `cd frontend && npm ci && npm run dev` -> http://localhost:5173. Tests `npm test`,
   typecheck `npm run typecheck`, lint `npm run lint`, build `npm run build` -> `frontend/dist`
   (Cloudflare Pages: root `frontend`, build `npm ci && npm run build`, output `dist`).
-- Refresh data / fixtures: `make bake` (network, FRED) and `make fixtures` (with `.venv`
-  python: `make PYTHON=.venv/bin/python bake`).
+- Refresh data / fixtures: `make bake` (network, FRED), `make bake-options` (network, Cboe;
+  `INPUT=chain.json` for a saved chain; ~3 min of fits) and `make fixtures` (with `.venv`
+  python: `make PYTHON=.venv/bin/python bake`). Fixtures rewrite parity.json's timing field;
+  revert it if nothing else changed.
+- Deploy the lab: `npx wrangler pages deploy frontend/dist --project-name heston --branch main`
+  (after `npm run build`; ask the user first).
 - Full stack: `docker compose up --build` (frontend :3000, api :8000, Redis :6379;
   synthetic by default, `HRL_OFFLINE=0` opts into live requests)
 - Regenerate README charts: `.venv/bin/python -m visualization.plots` -> docs/assets/
@@ -110,7 +125,15 @@ calibrate stream, paths, hmm) -> SVG charts / canvas surface. No network calls a
   delta-like quote grid is rectangular. Embed: `?embed=1`; attract: `?embed=1&autoplay=1`.
   Regime params: kappa pooled from the VIX3M^2-on-VIX^2 slope; theta/v0 per regime from
   the two tenors; sigma/rho from daily dv0 (see bake script). FRED has no volume, so the
-  HMM drops `volume_ratio`. Option quotes are synthetic and labelled so in the UI.
+  HMM drops `volume_ratio`.
+- **Market models:** everything prices in forward units (F = 1, undiscounted, k = ln K/F),
+  so per-expiry forwards and discounts drop out. Use `slice_nodes(atm, tau)` (3 GL panels,
+  184 nodes) for prices and `density_nodes` (696) for densities: real fits have vol-of-vol
+  4–6, where phi decays exponentially, and a single [0, U] rule is either truncated or
+  under-resolved. Market bounds are wider than configs/base.yaml (kappa <= 50, sigma <= 8).
+  The browser fit starts from the Python best start stored in spx.json.
+- **Cboe data terms:** the site permits personal viewing; redistribution needs Cboe's
+  approval. Only derived IVs/forwards are committed; raw chains stay out of git.
 - `/api/regime/parameters` returns 202 while computing (clients poll). Three additive fields
   remain in `RegimeParametersResponse`: `param_samples`, `static_mae_by_regime`,
   `regime_mae_by_regime` (the old dashboard used them; the lab does not call the API).

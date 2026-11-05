@@ -27,12 +27,39 @@ export interface PathResult {
   /** Sample paths for drawing. */
   sPaths: Float64Array[]
   vPaths: Float64Array[]
+  /** Per-step histograms of S_t and sqrt(v_t) (density shading of the fan charts). */
+  sHist: Hist
+  vHist: Hist
   /** Terminal log-returns ln(S_T / S_0) for every path. */
   terminal: Float64Array
   meanST: number
   seST: number
   zeroVarShare: number
   ms: number
+}
+
+/** Row-major counts [step * bins + bin] over [lo, hi], normalised to a density per step. */
+export interface Hist {
+  lo: number
+  hi: number
+  bins: number
+  data: Float32Array
+}
+
+const HIST_BINS = 96
+
+function histograms(X: Float32Array, steps: number, paths: number, lo: number, hi: number): Hist {
+  const data = new Float32Array((steps + 1) * HIST_BINS)
+  const scale = HIST_BINS / (hi - lo)
+  const w = scale / paths // density per unit value: 1 / (paths * binWidth)
+  for (let i = 0; i <= steps; i++) {
+    const off = i * HIST_BINS
+    for (let p = 0; p < paths; p++) {
+      const b = Math.floor((X[i * paths + p] - lo) * scale)
+      if (b >= 0 && b < HIST_BINS) data[off + b] += w
+    }
+  }
+  return { lo, hi, bins: HIST_BINS, data }
 }
 
 export function simulate(req: PathRequest): PathResult {
@@ -94,14 +121,23 @@ export function simulate(req: PathRequest): PathResult {
   const sq = req.quantiles.map(() => new Float64Array(steps + 1))
   const vq = req.quantiles.map(() => new Float64Array(steps + 1))
   const col = new Float32Array(paths)
+  // Histogram ranges: the 0.2% / 99.8% quantiles over all steps.
+  let sLo = Infinity
+  let sHi = -Infinity
+  let vHi = -Infinity
   for (let i = 0; i <= steps; i++) {
     col.set(S.subarray(i * paths, (i + 1) * paths))
     col.sort()
     req.quantiles.forEach((q, k) => (sq[k][i] = quantileSorted(col, q)))
+    sLo = Math.min(sLo, quantileSorted(col, 0.002))
+    sHi = Math.max(sHi, quantileSorted(col, 0.998))
     col.set(V.subarray(i * paths, (i + 1) * paths))
     col.sort()
     req.quantiles.forEach((q, k) => (vq[k][i] = quantileSorted(col, q)))
+    vHi = Math.max(vHi, quantileSorted(col, 0.998))
   }
+  const sHist = histograms(S, steps, paths, sLo, sHi)
+  const vHist = histograms(V, steps, paths, 0, vHi)
   const ns = Math.min(req.samples, paths)
   const sPaths: Float64Array[] = []
   const vPaths: Float64Array[] = []
@@ -132,6 +168,8 @@ export function simulate(req: PathRequest): PathResult {
     vq,
     sPaths,
     vPaths,
+    sHist,
+    vHist,
     terminal,
     meanST,
     seST,

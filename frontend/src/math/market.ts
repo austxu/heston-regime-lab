@@ -141,14 +141,15 @@ export function smileCurves(model: ModelId, p: ArrayLike<number>, slices: Market
 }
 
 /**
- * IV surface on a (tau x z) grid with z = ln(K/F) / sqrt(tau): rows are maturities, and the
- * quadrature at an off-quote maturity uses the ATM vol interpolated between slices.
+ * IV surface on a (tau x x) grid with x = ln(K/F) / sqrt(tau): rows are maturities, and the
+ * quadrature at an off-quote maturity uses the ATM vol interpolated between slices (atms).
  */
-export function surfaceZ(model: ModelId, p: ArrayLike<number>, taus: number[], zs: number[], atmAt: (tau: number) => number) {
+export function surfaceZ(model: ModelId, p: ArrayLike<number>, taus: number[], xs: number[], atms: number[]) {
+  const zs = xs
   const iv = new Float64Array(taus.length * zs.length)
   const flag = new Uint8Array(iv.length)
   taus.forEach((tau, i) => {
-    const kern = lewisFor(model, p, tau, atmAt(tau))
+    const kern = lewisFor(model, p, tau, atms[i])
     zs.forEach((z, j) => {
       const k = z * Math.sqrt(tau)
       const price = otmPrice(kern, k)
@@ -158,7 +159,11 @@ export function surfaceZ(model: ModelId, p: ArrayLike<number>, taus: number[], z
     const row = i * zs.length
     let first = -1
     let last = -1
-    for (let j = 0; j < zs.length; j++) if (Number.isFinite(iv[row + j])) (first < 0 && (first = j), (last = j))
+    for (let j = 0; j < zs.length; j++) {
+      if (!Number.isFinite(iv[row + j])) continue
+      if (first < 0) first = j
+      last = j
+    }
     for (let j = 0; j < zs.length; j++) {
       if (Number.isFinite(iv[row + j])) continue
       iv[row + j] = first < 0 ? 0 : iv[row + (j < first ? first : last)]

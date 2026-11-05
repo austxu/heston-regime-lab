@@ -21,8 +21,6 @@ export interface RegimeInfo {
     expectedDuration: number
   }
   params: HestonParams
-  quotes: { spot: number; rate: number; noiseIv: number; seed: number; strike: number[]; maturity: number[]; iv: number[] }
-  python: { params: HestonParams; loss: number; rmseIv: number; nit: number; nfev: number; seconds: number; message: string }
 }
 
 export interface MarketData {

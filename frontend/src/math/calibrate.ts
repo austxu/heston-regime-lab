@@ -107,13 +107,3 @@ export function calibrate(quotes: Quotes, opts: CalibOptions = {}): CalibResult 
     if (s.done) return s.value
   }
 }
-
-/** Best flat (Black-Scholes) vol in the least-squares sense is the mean market IV. */
-export function flatVolFit(iv: ArrayLike<number>) {
-  let s = 0
-  for (let i = 0; i < iv.length; i++) s += iv[i]
-  const sigma = s / iv.length
-  let sq = 0
-  for (let i = 0; i < iv.length; i++) sq += (iv[i] - sigma) ** 2
-  return { sigma, rmseIv: Math.sqrt(sq / iv.length) }
-}
