@@ -53,7 +53,7 @@ const fitPoints = (ring: number) => {
   return pts
 }
 const FIT_WIDE = fitPoints(1.38)
-const FIT_SMALL = fitPoints(1.24)
+const FIT_SMALL = fitPoints(1.32)
 const FIT_MIN = fitPoints(1.02)
 const DIST = 7.5
 const DEFAULT_YAW = -0.52
@@ -79,6 +79,7 @@ export class SurfaceRenderer {
   private autoSpeed = 0
   private dragging = false
   private lastPointer: { x: number; y: number; t: number } | null = null
+  private downAt: { x: number; y: number } | null = null
   private grid: Grid | null = null
   private cur: Float64Array | null = null
   private tgt: Float64Array | null = null
@@ -272,6 +273,7 @@ export class SurfaceRenderer {
       this.dragging = true
       this.vYaw = this.vPitch = 0
       this.lastPointer = { x: e.clientX, y: e.clientY, t: e.timeStamp }
+      this.downAt = { x: e.clientX, y: e.clientY }
       c.setPointerCapture(e.pointerId)
       this.setHover(null)
     })
@@ -299,11 +301,19 @@ export class SurfaceRenderer {
       if (c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId)
       // Released after a pause: no fling.
       if (!this.lastPointer || e.timeStamp - this.lastPointer.t > 80 || this.opts.reducedMotion) this.vYaw = this.vPitch = 0
+      // A tap (touch without movement) reads the surface at that point, like hover.
+      if (e.type === 'pointerup' && e.pointerType !== 'mouse' && this.downAt && Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) < 6) {
+        const r = c.getBoundingClientRect()
+        this.vYaw = this.vPitch = 0
+        this.hoverPx = { x: e.clientX - r.left, y: e.clientY - r.top }
+      }
+      this.downAt = null
       this.requestFrame()
     }
     on('pointerup', end)
     on('pointercancel', end)
-    on('pointerleave', () => {
+    on('pointerleave', (e) => {
+      if (e.pointerType !== 'mouse') return // touch fires leave right after a tap
       this.hoverPx = null
       this.setHover(null)
       this.requestFrame()
@@ -674,7 +684,7 @@ export class SurfaceRenderer {
     ctx.textAlign = 'center'
     // Titles sit between two ticks so they never collide with a tick label.
     const mid = (arr: number[]) => (arr.length > 1 ? (arr[Math.floor((arr.length - 1) / 2)] + arr[Math.floor((arr.length - 1) / 2) + 1]) / 2 : arr[0])
-    label(xt.length > 1 ? this.wx(mid(xt)) : 0, frontY * (small ? 1.3 : 1.36), 0, this.opts.xLabel)
+    label(xt.length > 1 ? this.wx(mid(xt)) : 0, frontY * (small ? 1.44 : 1.36), 0, this.opts.xLabel)
     label(frontX * (small ? 1.34 : 1.42), tt.length > 1 ? this.wy(mid(tt)) : 0, 0, 'maturity')
     label(best[0], best[1], BOX_H, 'implied vol', -7, -14)
   }

@@ -74,14 +74,19 @@ export function Paths(props: { params: HestonParams; rate: number; active: boole
     const crashK = Math.log(0.8)
     let below = 0
     let pay = 0
+    let pay2 = 0
     for (const r of res.terminal) {
       if (r < crashK) below++
-      pay += Math.max(market.spot * Math.exp(r) - market.spot, 0)
+      const x = Math.max(market.spot * Math.exp(r) - market.spot, 0)
+      pay += x
+      pay2 += x * x
     }
+    const nT = res.terminal.length
+    const mcSe = (Math.exp(-market.rate * T) * Math.sqrt(Math.max(0, pay2 / nT - (pay / nT) ** 2))) / Math.sqrt(nT)
     const pCrashBS = normCdf((crashK - (market.rate - 0.5 * sBS * sBS) * T) / (sBS * Math.sqrt(T)))
     const mcCall = (Math.exp(-market.rate * T) * pay) / res.terminal.length
     const fourier = hestonPrice(params, market.spot, market.spot, market.rate, 0, T)
-    return { ...mo, fwd, sBS, pCrash: below / res.terminal.length, pCrashBS, mcCall, fourier }
+    return { ...mo, fwd, sBS, pCrash: below / res.terminal.length, pCrashBS, mcCall, mcSe, fourier }
   }, [res])
 
   const feller = 2 * params.kappa * params.theta > sigma * sigma
@@ -179,7 +184,7 @@ export function Paths(props: { params: HestonParams; rate: number; active: boole
             <div>
               <dt>ATM call, Monte Carlo</dt>
               <dd>
-                {stats ? num(stats.mcCall, 3) : '—'}
+                {stats ? `${num(stats.mcCall, 3)} ± ${num(2 * stats.mcSe, 3)}` : '—'}
                 <small>Fourier {stats ? num(stats.fourier, 3) : '—'}</small>
               </dd>
             </div>

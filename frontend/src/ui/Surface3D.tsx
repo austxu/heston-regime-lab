@@ -18,6 +18,8 @@ interface Props {
   pad?: { top: number; bottom: number }
 }
 
+const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').matches
+
 /** The canvas surface plus an HTML hover readout and an accessible description. */
 export function Surface3D(p: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -77,7 +79,7 @@ export function Surface3D(p: Props) {
           {hover.flagged && <div class="warn">wing below quadrature floor · extrapolated</div>}
         </div>
       )}
-      {p.hint && <div class="surface-hint">{p.hint}</div>}
+      {p.hint && <div class="surface-hint">{TOUCH ? p.hint.replace('hover', 'tap') : p.hint}</div>}
     </div>
   )
 }

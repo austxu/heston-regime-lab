@@ -629,6 +629,7 @@ input[type='range']:focus-visible::-moz-range-thumb {
 /* ------------------------------------------------------------------ tables */
 
 .table-wrap {
+  position: relative; /* contain .sr-only descendants inside the scroll box */
   overflow-x: auto;
 }
 table.data {
@@ -1350,7 +1351,7 @@ math[display='block'] {
   }
   .surface-wrap,
   .area-surface .surface-wrap {
-    height: 92vw;
+    height: 82vw;
   }
   .segmented button {
     padding: 0 8px;
