@@ -1,34 +1,20 @@
 # heston-regime-lab — Project Overview
 
 ## 1. Purpose & Goals
-A stochastic-volatility research lab. Calibrate the Heston model to SPX options, detect
-market regimes with an HMM, and study how Heston parameters and calibration error vary
-across regimes — exposed as a live API.
+A stochastic-volatility research lab. Calibrate the Heston model, detect market regimes
+with an HMM, and study how Heston parameters vary across regimes.
 
-**Current status: Phase 4 — deployment-ready (CI/CD + hardening).** All four implementation
-phases are complete: math core, FastAPI backend, React dashboard, deployment config,
-GitHub Actions CI/CD, and production hardening. Creating the Railway project, domains, and
-token remains a user-owned step; no public deployment is claimed in this repository.
-
-Phases:
-- Phase 1 ✅ Math core (char. fn, Gil-Pelaez/Gauss-Legendre, BS+IV, calibration, round-trip).
-- Phase 2 ✅ Data layer, vol features, 3-state HMM, XGBoost residual correction,
-  Kruskal-Wallis/regime-conditional analysis, FastAPI/Redis/WebSocket API, Docker.
-- Phase 3 ✅ React dashboard: Vol Surface, Live Calibration (WS), Regime Dashboard, Model
-  Comparison; skeletons, error boundaries, staleness indicator; dockerised behind nginx.
-- Phase 4 ✅ GitHub Actions CI (Ruff + pytest + frontend checks + image builds) and CD (Railway), Railway
-  config, production hardening (rate limit, gzip, request timeout, JSON logging, Sentry),
-  diagnostic charts, final README. See DEPLOY.md.
+**Current status:** the public demo is a **static browser lab** (`frontend/`, branch
+`feature/browser-lab`). It runs a TypeScript port of the math in a Web Worker and reads
+market history baked offline from FRED. The Python package and the FastAPI service are
+intact, but the lab does not call the API.
 
 ## 2. Tech Stack
-- Python 3.12 (local and Docker). numpy, scipy, pandas.
-- Models/data: hmmlearn (GaussianHMM), xgboost (needs OpenMP: `brew install libomp`;
-  sklearn GradientBoosting fallback), scikit-learn.
-- Live data: yfinance (SPX/VIX), fredapi (risk-free); all with synthetic fallback.
-- API: FastAPI, uvicorn, pydantic v2, redis (in-memory fallback), websockets.
-- Frontend: React 19 + TypeScript (Vite), Tailwind v3, a trace-scoped Plotly build via
-  the react-plotly.js factory, @tanstack/react-query. Node 22+.
-- pyyaml config, pytest, Ruff. Use an isolated virtualenv at `.venv`.
+- Python 3.12 (`.venv` via `uv venv --python 3.12`; system python is 3.14). numpy, scipy,
+  pandas, hmmlearn, xgboost, FastAPI (optional service), pytest, Ruff.
+- Lab: Preact 10 + TypeScript + Vite 8 (JSX through the oxc transform, `jsxImportSource:
+  preact`), vitest, oxlint. Self-hosted Inter / Roboto Mono via @fontsource. No chart or
+  WebGL libraries: SVG charts and a canvas-2D 3D renderer. Node 22.
 
 ## 3. Architecture / Codebase Map
 ```
@@ -49,10 +35,18 @@ api/models/schemas.py     Pydantic v2 response models (incl. provenance, WS mess
 api/services/             pipeline + calibration/surface/comparison/regime orchestration
 api/routes/               calibration, surface, regime, comparison routers
 api/websocket/calibration_stream.py  threaded calibrate -> async queue -> WS frames
-frontend/src/api/         typed client.ts + types.ts mirroring the Pydantic schemas
-frontend/src/hooks/       useWebSocket (backoff), useCalibration, useRegime, useApiQueries
-frontend/src/components/  VolSurface, CalibrationPanel, RegimeDashboard, ModelComparison, ui/
-frontend/src/lib/         theme, dataMode (live/synthetic context), kde, format, params
+frontend/src/math/        TS port: heston (little trap), blackScholes (Cephes ndtr, brentq port),
+                          surface (OTM-leg IVs, grids), calibrate (bounded LM), hmm (Baum-Welch),
+                          montecarlo (Andersen QE), rng; *.test.ts = parity + model tests
+frontend/src/math/__fixtures__/parity.json  Python reference values (make fixtures)
+frontend/src/data/market.json  baked FRED SPX/VIX/VIX3M/DGS3MO + HMM regimes + regime params
+frontend/src/worker/      lab.worker.ts (all numerics), protocol.ts, client.ts (latest-wins)
+frontend/src/render/      surface3d.ts canvas-2D renderer, colormap.ts (OKLab LUT)
+frontend/src/views/       Playground (surface), Calibration, Regimes, Paths, Model
+frontend/src/ui/          Slider, Segmented, Surface3D wrapper, SVG axes
+frontend/public/_headers  Cloudflare Pages CSP/caching; og.png + apple-touch-icon.png
+scripts/bake_market_data.py      FRED -> features -> HMM -> regime params -> market.json
+scripts/make_parity_fixtures.py  Python reference values for the vitest parity suite
 api/ratelimit.py          per-IP rate limiter (cache-backed) for /api/calibration/run
 api/logging_config.py     JSON log formatter + configure_logging()
 visualization/plots.py    diagnostic charts -> docs/assets/*.png (README figures)
@@ -70,16 +64,19 @@ tests/test_regressions.py boundary validation, cache concurrency, proxy/mode/job
 Data flow (API): request -> route -> service (cache.get_or_compute) ->
 fetchers.get_market_snapshot (live|stale-cache|synthetic) -> filter liquid ->
 calibrate / fit HMM / compare -> Pydantic response with provenance.
-Data flow (frontend): React Query / WebSocket hook -> typed client (`/api`, `/ws` proxied
-to the backend) -> Plotly views; a global live/synthetic toggle keys every query.
+Data flow (lab): `market.json` (lazy chunk) + slider state -> worker requests (surface,
+calibrate stream, paths, hmm) -> SVG charts / canvas surface. No network calls at runtime.
 
 ## 4. Build / Run / Test
 - Bootstrap: `python3.12 -m venv .venv && source .venv/bin/activate && make bootstrap`
 - All local checks: `make check`; tests only: `make test`
 - Round-trip demo: `.venv/bin/python -m calibration.validators`
 - API offline: `HRL_OFFLINE=1 .venv/bin/uvicorn api.main:app --reload` -> http://localhost:8000/docs
-- Frontend dev: `cd frontend && npm ci && npm run dev` -> http://localhost:5173
-  (proxies /api + /ws to :8000). Build/typecheck: `npm run build`.
+- Lab: `cd frontend && npm ci && npm run dev` -> http://localhost:5173. Tests `npm test`,
+  typecheck `npm run typecheck`, lint `npm run lint`, build `npm run build` -> `frontend/dist`
+  (Cloudflare Pages: root `frontend`, build `npm ci && npm run build`, output `dist`).
+- Refresh data / fixtures: `make bake` (network, FRED) and `make fixtures` (with `.venv`
+  python: `make PYTHON=.venv/bin/python bake`).
 - Full stack: `docker compose up --build` (frontend :3000, api :8000, Redis :6379;
   synthetic by default, `HRL_OFFLINE=0` opts into live requests)
 - Regenerate README charts: `.venv/bin/python -m visualization.plots` -> docs/assets/
@@ -106,14 +103,17 @@ to the backend) -> Plotly views; a global live/synthetic toggle keys every query
   calibration error is realistic (~0.1%) and residual correction has structure to fix.
 - Heavy compute runs in `run_in_threadpool`; the WS runs calibrate in a worker thread and
   bridges per-iteration progress to the event loop via a thread-safe queue.
-- **Frontend:** `verbatimModuleSyntax` is on — use `import type` for type-only imports.
-  Plotly is imported only via `src/components/Plot.tsx`, which registers the scatter, bar,
-  heatmap, and surface traces used by the app; never import `react-plotly.js` directly or
-  the full Plotly distribution. The chart engine is lazy-loaded behind Suspense.
-- `/api/regime/parameters` returns 202 while computing; the frontend surfaces that as
-  `AnalysisPendingError` and polls via React Query `refetchInterval` (rendered as "computing").
-- Three additive, non-breaking fields were added to `RegimeParametersResponse` for the
-  dashboard: `param_samples`, `static_mae_by_regime`, `regime_mae_by_regime`.
+- **Lab:** `verbatimModuleSyntax` + `erasableSyntaxOnly` are on (no TS parameter
+  properties/enums; `import type` for types). All heavy math goes through the worker; the
+  surface/IV grid flat-extrapolates and flags wing cells whose OTM price is below the
+  ~1e-8 quadrature floor (`surfaceGrid`). Calibration grids use x = ln(K/F)/sqrt(T) so the
+  delta-like quote grid is rectangular. Embed: `?embed=1`; attract: `?embed=1&autoplay=1`.
+  Regime params: kappa pooled from the VIX3M^2-on-VIX^2 slope; theta/v0 per regime from
+  the two tenors; sigma/rho from daily dv0 (see bake script). FRED has no volume, so the
+  HMM drops `volume_ratio`. Option quotes are synthetic and labelled so in the UI.
+- `/api/regime/parameters` returns 202 while computing (clients poll). Three additive fields
+  remain in `RegimeParametersResponse`: `param_samples`, `static_mae_by_regime`,
+  `regime_mae_by_regime` (the old dashboard used them; the lab does not call the API).
 - **Hardening:** expensive calibration entry points are admission-controlled (cache-backed
   per-IP HTTP limits plus a bounded WebSocket worker pool and Origin validation); gzip via
   GZipMiddleware/nginx; live fetches have a `data.request_timeout`

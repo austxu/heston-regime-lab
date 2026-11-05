@@ -1,22 +1,27 @@
-# heston-regime-lab — frontend
+# heston-regime-lab — browser lab
 
-React + TypeScript + Vite dashboard for the heston-regime-lab API. Tailwind (dark theme),
-lazy trace-scoped Plotly charts, React Query for data, and native WebSocket calibration.
+A static, fully client-side Heston lab: Preact + TypeScript + Vite, with all numerics in a
+Web Worker. It needs no backend and no WebGL.
 
 ```bash
 npm ci
-npm run dev        # http://localhost:5173; proxies /api and /ws to the API on :8000
+npm run dev        # http://localhost:5173
+npm test           # vitest: parity with the Python research code + model tests
 npm run typecheck
 npm run lint
-npm test
-npm run build      # type-check + production build to dist/
+npm run build      # type-check + production build to dist/ (deploy dist/ as static files)
 ```
 
-Use `VITE_API_TARGET` to change the local development proxy target. Set `VITE_API_BASE`
-only when the browser must call a cross-origin deployment directly; both HTTP requests and
-the calibration WebSocket derive from it. Same-origin deployment remains the preferred path.
+| Path | Contents |
+|---|---|
+| `src/math/` | TS port of `models/heston.py`, `models/black_scholes.py`, calibration (bounded LM), surfaces, QE Monte Carlo, Baum–Welch HMM |
+| `src/math/__fixtures__/parity.json` | reference values from `scripts/make_parity_fixtures.py` |
+| `src/data/market.json` | baked FRED history + HMM regimes + regime parameters (`scripts/bake_market_data.py`) |
+| `src/worker/` | the lab worker and a latest-wins client |
+| `src/render/` | canvas-2D 3D surface renderer, OKLab colormap |
+| `src/views/` | Surface, Calibration, Regimes, Paths, Model |
+| `public/_headers` | Cloudflare Pages headers (CSP, caching) |
 
-Views are deep-linkable at `#surface`, `#calibration`, `#regime`, and `#comparison`.
-The expensive bootstrapped regime study runs only when requested from the regime view;
-its result is cached and the lighter current/history panels remain immediately usable.
-See the repository root README for the full project and deployment instructions.
+URL flags: `?embed=1` hides page chrome for iframes. `?embed=1&autoplay=1` shows an attract
+loop that runs until the first interaction. Tabs are deep-linkable at `#surface`,
+`#calibration`, `#regimes`, `#paths` and `#model`.

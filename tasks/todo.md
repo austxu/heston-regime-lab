@@ -13,7 +13,17 @@ of preserving the obsolete Phase 4 launch checklist.
 - [x] Railway config, exact-green-commit CD workflow, and deployment runbook
 - [x] Rate limiting, gzip, request IDs/JSON logs, optional Sentry, and cache fallback
 
-## User-owned launch steps
+## Browser lab (feature/browser-lab)
+
+- [x] TS math core with Python parity tests; worker; canvas-2D surface; five views
+- [x] Baked FRED history + HMM regimes (`make bake`), `_headers`, OG image
+- [ ] User: push the branch, set the Cloudflare Pages project `heston` to root `frontend`,
+      build `npm ci && npm run build`, output `dist`, then verify heston.austxu.dev + the
+      austxu.dev embed (`?embed=1`, `?embed=1&autoplay=1`)
+- [ ] Consider a scheduled job that re-runs `make bake` and opens a PR with fresh data
+- [ ] Once the static lab is live, decide whether to retire the Render API service
+
+## User-owned launch steps (optional API)
 
 - [ ] Create the Railway project, managed Redis, API, and frontend services
 - [ ] Configure service references/secrets and a GitHub `RAILWAY_TOKEN`

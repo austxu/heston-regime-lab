@@ -52,3 +52,17 @@ explicit runtime-only `COPY` statements; run the resulting process as a non-root
 2026-07-15 | A `workflow_run` deployment that checks out the default branch can deploy a
 newer commit than the one CI actually tested | Check out `workflow_run.head_sha`, pin the
 deployment CLI, and serialize production deploys.
+
+2026-11-05 | TS port of the Heston CF disagreed with numpy by ~1e-11 relative near u -> 0 for
+phi(u - i): the naive complex sqrt `im = sqrt((|z| - x) / 2)` cancels catastrophically | Use the
+csqrt form (x >= 0: re = sqrt((|z| + x) / 2), im = y / (2 re)); parity then holds to ~1e-14.
+
+2026-11-05 | The browser Baum-Welch with 1-4 k-means restarts converged to a worse local optimum
+(74% agreement with hmmlearn) | EM is init-sensitive: use >= 8 seeded restarts mixing k-means and
+random partitions and keep the best log-likelihood (100% agreement, logL matches hmmlearn).
+
+2026-11-05 | vitest 4 hides console output of passing tests under the agent reporter | Run
+`npx vitest run --reporter=default` to see logged parity numbers.
+
+2026-11-05 | A commit was written with a Co-Authored-By trailer | Never add agent attribution
+trailers (Co-Authored-By / Generated-with) to commits or PRs in this repo.

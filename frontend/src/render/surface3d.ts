@@ -258,7 +258,7 @@ export class SurfaceRenderer {
   }
 
   private setPitch(p: number) {
-    this.pitch = Math.min(1.25, Math.max(0.08, p))
+    this.pitch = Math.min(1.25, Math.max(0.18, p))
   }
 
   private bind() {

@@ -1,4 +1,27 @@
-# Deployment (Railway)
+# Deployment
+
+## Browser lab (static, primary)
+
+The public lab at `heston.austxu.dev` is a static site: it needs no API, Redis or
+WebSocket. On Cloudflare Pages:
+
+| Setting | Value |
+|---|---|
+| Root directory | `frontend` |
+| Build command | `npm ci && npm run build` |
+| Output directory | `dist` |
+| Node | 22 |
+
+`frontend/public/_headers` is copied into `dist/` and sets the CSP (including
+`frame-ancestors` for the austxu.dev embed), security headers, and immutable caching for
+hashed `/assets/*`. To refresh the baked market data, run
+`HRL_OFFLINE=1 python -m scripts.bake_market_data`, commit `frontend/src/data/market.json`
+and redeploy.
+
+Once the static lab is live, the API service described below is optional. Its Docker
+frontend image still builds the same static bundle behind nginx.
+
+# Optional API deployment (Railway)
 
 > **Render production cutover:** the portfolio deployment manifest now defines a Render
 > Free FastAPI service for this repository. It uses `docker/Dockerfile.api`, `HRL_OFFLINE=1`,
