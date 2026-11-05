@@ -47,6 +47,10 @@ export interface RendererOptions {
   pad?: { top: number; bottom: number }
   /** Maturity axis spacing; 'sqrt' gives short expiries room. */
   tauScale?: 'linear' | 'sqrt'
+  /** Fixed IV axis range, so a moving surface is seen moving rather than rescaled. */
+  zRange?: [number, number]
+  /** Auto-rotation swings around the default view instead of spinning (no edge-on views). */
+  sway?: boolean
 }
 
 /** Optional canvases stacked under the main one for the WebGL path. */
@@ -88,6 +92,7 @@ export class SurfaceRenderer {
   private vYaw = 0
   private vPitch = 0
   private autoSpeed = 0
+  private swayT = 0
   private dragging = false
   private lastPointer: { x: number; y: number; t: number } | null = null
   private downAt: { x: number; y: number } | null = null
@@ -137,6 +142,7 @@ export class SurfaceRenderer {
 
   setOptions(o: Partial<RendererOptions>) {
     this.opts = { ...this.opts, ...o }
+    if ('zRange' in o) this.updateRange(false)
     this.requestFrame()
   }
 
@@ -205,6 +211,11 @@ export class SurfaceRenderer {
 
   private updateRange(snap: boolean) {
     if (!this.tgt) return
+    if (this.opts.zRange) {
+      ;[this.zLoT, this.zHiT] = this.opts.zRange
+      if (snap || this.opts.reducedMotion) [this.zLo, this.zHi] = this.opts.zRange
+      return
+    }
     let lo = Infinity
     let hi = -Infinity
     for (const v of this.tgt) {
@@ -294,7 +305,12 @@ export class SurfaceRenderer {
       moving = true
     }
     if (this.autoSpeed && !this.dragging) {
-      this.yaw += (this.autoSpeed * dt) / 1000
+      if (this.opts.sway) {
+        // yaw = default + A sin(w t) with peak angular speed A w = autoSpeed.
+        const A = 0.55
+        this.swayT += dt / 1000
+        this.yaw = DEFAULT_YAW + A * Math.sin((this.autoSpeed / A) * this.swayT)
+      } else this.yaw += (this.autoSpeed * dt) / 1000
       moving = true
     }
     return moving

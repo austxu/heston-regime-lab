@@ -122,7 +122,7 @@ calibrate stream, paths, hmm) -> SVG charts / canvas surface. No network calls a
   properties/enums; `import type` for types). All heavy math goes through the worker; the
   surface/IV grid flat-extrapolates and flags wing cells whose OTM price is below the
   ~1e-8 quadrature floor (`surfaceGrid`). Calibration grids use x = ln(K/F)/sqrt(T) so the
-  delta-like quote grid is rectangular. Embed: `?embed=1`; attract: `?embed=1&autoplay=1` (views/Attract.tsx: live model race on the SPX snapshot, frames cached after one pass; reduced motion shows the final fit).
+  delta-like quote grid is rectangular. Embed: `?embed=1`; attract: `?embed=1&autoplay=1` (views/Attract.tsx: live model race on the SPX snapshot, then a FRED history replay where each day's VIX/VIX3M sets v0 and theta with kappa, sigma, rho from today's Heston fit; frames cached after one pass; reduced motion shows the final fit).
   Regime params: kappa pooled from the VIX3M^2-on-VIX^2 slope; theta/v0 per regime from
   the two tenors; sigma/rho from daily dv0 (see bake script). FRED has no volume, so the
   HMM drops `volume_ratio`.

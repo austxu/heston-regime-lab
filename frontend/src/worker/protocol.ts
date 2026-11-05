@@ -20,6 +20,7 @@ export type Request =
   | { type: 'surface'; id: number; params: HestonParams; market: Market; grid: Grid; quality: 'draft' | 'fine' }
   | { type: 'market-eval'; id: number; model: ModelId; params: number[]; slices: MarketSlice[]; view: MarketView }
   | { type: 'market-calibrate'; id: number; model: ModelId; start: number[]; slices: MarketSlice[]; view: MarketView }
+  | { type: 'surface-batch'; id: number; model: ModelId; params: number[][]; view: MarketView }
   | { type: 'densities'; id: number; slices: MarketSlice[]; fits: { model: ModelId; params: number[] }[]; xs: number[][] }
   | { type: 'paths'; id: number; req: PathRequest }
   | { type: 'hmm'; id: number; z: number[][]; K: number }
@@ -57,6 +58,12 @@ export interface MarketDoneMsg {
   id: number
   result: MarketResult
 }
+export interface SurfaceBatchMsg {
+  type: 'surface-batch'
+  id: number
+  /** One IV surface (rows view.taus, columns view.xs) per parameter vector. */
+  surfaces: Float64Array[]
+}
 export interface DensitiesMsg {
   type: 'densities'
   id: number
@@ -75,4 +82,4 @@ export interface HmmMsg {
   fit: HmmFit
   ms: number
 }
-export type Response = SurfaceMsg | MarketEvalMsg | MarketIterMsg | MarketDoneMsg | DensitiesMsg | PathsMsg | HmmMsg
+export type Response = SurfaceMsg | MarketEvalMsg | MarketIterMsg | MarketDoneMsg | SurfaceBatchMsg | DensitiesMsg | PathsMsg | HmmMsg

@@ -80,7 +80,7 @@ export function App() {
       setAttract(false)
       if (!location.hash) go('market')
     }
-    return mv ? <mv.Attract spx={spx} onInteract={leave} /> : <div class="attract" />
+    return mv ? <mv.Attract spx={spx} market={market} onInteract={leave} /> : <div class="attract" />
   }
 
   const onTabKey = (e: KeyboardEvent) => {

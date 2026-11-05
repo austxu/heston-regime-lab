@@ -19,6 +19,8 @@ interface Props {
   /** Maturity axis spacing; 'sqrt' gives short expiries room. */
   tauScale?: 'linear' | 'sqrt'
   tauTicks?: number[]
+  zRange?: [number, number]
+  sway?: boolean
 }
 
 const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').matches
@@ -47,6 +49,8 @@ export function Surface3D(p: Props) {
       pad: p.pad,
       tauScale: p.tauScale,
       tauTicks: p.tauTicks,
+      zRange: p.zRange,
+      sway: p.sway,
     }
     r.current = new SurfaceRenderer(canvas.current!, opts, { back: back.current!, gl: glc.current! })
     setMode(r.current.webgl ? 'webgl' : 'canvas')
@@ -54,6 +58,7 @@ export function Surface3D(p: Props) {
   }, [])
   useEffect(() => r.current?.setOptions({ xLabel: p.xLabel, xTick: p.xTick, xTicks: p.xTicks }), [p.xLabel, p.xTick, p.xTicks])
   useEffect(() => r.current?.setReducedMotion(reduced), [reduced])
+  useEffect(() => r.current?.setOptions({ zRange: p.zRange }), [p.zRange?.[0], p.zRange?.[1]])
   useEffect(() => {
     if (p.data) r.current?.setSurface(p.data)
   }, [p.data])

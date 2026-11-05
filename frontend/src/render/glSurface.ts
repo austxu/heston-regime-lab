@@ -148,16 +148,21 @@ const PFS = `#version 300 es
 precision highp float;
 in vec4 vC;
 uniform float uDisc;
+uniform float uAlpha;
 out vec4 o;
 void main() {
-  if (uDisc < 0.5) { o = vec4(vC.rgb * vC.a, vC.a); return; }
+  if (uDisc < 0.5) { o = vec4(vC.rgb * vC.a * uAlpha, vC.a * uAlpha); return; }
+  // A solid disc (inner 55%) with a warm-white core, plus a soft ember glow to the edge.
   vec2 d = gl_PointCoord * 2.0 - 1.0;
   float r = length(d);
   float aa = fwidth(r);
-  float alpha = 1.0 - smoothstep(1.0 - aa, 1.0, r);
-  if (alpha <= 0.0) discard;
-  vec3 col = mix(vC.rgb, vec3(0.047, 0.055, 0.07), smoothstep(0.62 - aa, 0.62, r) * 0.85);
-  o = vec4(col * alpha, alpha);
+  float disc = 1.0 - smoothstep(0.55 - aa, 0.55 + aa, r);
+  float glow = (1.0 - smoothstep(0.55, 1.0, r)) * 0.32;
+  float a = max(disc, glow) * uAlpha;
+  if (a <= 0.003) discard;
+  vec3 core = mix(vec3(1.0, 0.95, 0.9), vC.rgb, smoothstep(0.05, 0.5, r));
+  vec3 col = mix(vC.rgb, core, disc);
+  o = vec4(col * a, a);
 }`
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram | null {
@@ -427,11 +432,23 @@ export class GlSurface {
       gl.bufferData(gl.ARRAY_BUFFER, col.subarray(0, (stemVerts + P) * 4), gl.DYNAMIC_DRAW)
       u = setCommon(this.pprog)
       gl.bindVertexArray(this.pvao)
-      gl.uniform1f(u('uDisc'), 0)
-      if (stemVerts) gl.drawArrays(gl.LINES, 0, stemVerts)
-      gl.uniform1f(u('uDisc'), 1)
-      gl.uniform1f(u('uPointSize'), (cam.w < 480 ? 5.6 : 7) * cam.dpr)
-      gl.drawArrays(gl.POINTS, stemVerts, P)
+      gl.uniform1f(u('uPointSize'), (cam.w < 480 ? 8 : 10) * cam.dpr)
+      // Quotes and stems never write depth; the parts behind the surface are drawn faintly
+      // first (depth GREATER) instead of being clipped, then the visible parts in full.
+      gl.depthMask(false)
+      for (const [fn, alpha] of [
+        [gl.GREATER, 0.28],
+        [gl.LEQUAL, 1],
+      ] as const) {
+        gl.depthFunc(fn)
+        gl.uniform1f(u('uAlpha'), alpha)
+        gl.uniform1f(u('uDisc'), 0)
+        if (stemVerts) gl.drawArrays(gl.LINES, 0, stemVerts)
+        gl.uniform1f(u('uDisc'), 1)
+        gl.drawArrays(gl.POINTS, stemVerts, P)
+      }
+      gl.depthMask(true)
+      gl.depthFunc(gl.LEQUAL)
     }
     gl.bindVertexArray(null)
   }

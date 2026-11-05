@@ -13,9 +13,10 @@ public demo is a **fully static browser lab** that runs a TypeScript port of the
 
 **Live lab:** [heston.austxu.dev](https://heston.austxu.dev). Static files only, no server.
 Add `?embed=1` for an iframe layout without page chrome, or `?embed=1&autoplay=1` for an
-attract loop: Heston, Bates and double Heston take turns calibrating to the real SPX quotes
-on the rotating surface while a scoreboard fills in, until the visitor drags (which opens
-the Market tab).
+attract loop in two acts: Heston, Bates and double Heston race to calibrate to the real SPX
+quotes on the surface while a scoreboard fills in; then nine years of real history replay at
+~200 trading days a second, each day's VIX and VIX3M re-levelling the fitted Heston surface
+over a VIX timeline coloured by HMM regime. Dragging opens the Market tab.
 
 ## Architecture
 

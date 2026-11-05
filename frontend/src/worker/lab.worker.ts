@@ -56,6 +56,11 @@ ctx.onmessage = async (ev: MessageEvent<Request>) => {
         await tick()
       }
     }
+    case 'surface-batch': {
+      const surfaces = msg.params.map((p) => surfaceZ(msg.model, p, msg.view.taus, msg.view.xs, msg.view.atms).iv)
+      post({ type: 'surface-batch', id: msg.id, surfaces }, surfaces.map((a) => a.buffer))
+      return
+    }
     case 'densities': {
       const t0 = performance.now()
       const q = msg.fits.map((f) => msg.slices.map((s, i) => modelDensity(f.model, f.params, s.tau, s.atmVol, msg.xs[i])))
