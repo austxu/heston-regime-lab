@@ -9,7 +9,9 @@ Usage::
 
     HRL_OFFLINE=1 .venv/bin/python -m scripts.make_parity_fixtures
 
-Writes ``frontend/src/math/__fixtures__/parity.json``.
+Writes ``frontend/src/math/__fixtures__/parity.json`` and, for the real-market models
+(``models.fourier``, ``models.bates``, ``models.double_heston``, ``models.svi``),
+``frontend/src/math/__fixtures__/market.json``.
 """
 
 from __future__ import annotations
@@ -20,18 +22,22 @@ from pathlib import Path
 
 import numpy as np
 
+from calibration.market import MODELS
 from calibration.optimizer import MarketData, calibrate, heston_implied_vols, load_config
 from calibration.validators import CONFIG_PATH, generate_synthetic_data
 from models.black_scholes import bs_price, bs_vega, implied_vol
+from models.fourier import density_nodes, implied_vol_otm, log_density, otm_price, slice_nodes
 from models.heston import (
     HestonParams,
     _gauss_legendre_nodes,
     heston_characteristic_function,
     heston_price,
 )
+from models.svi import svi_density, svi_g, svi_w
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "frontend" / "src" / "math" / "__fixtures__" / "parity.json"
+OUT_MARKET = OUT.with_name("market.json")
 NAMES = ("kappa", "theta", "sigma", "rho", "v0")
 
 PARAM_SETS = {
@@ -50,7 +56,67 @@ def as_dict(p: HestonParams) -> dict:
     return {n: float(getattr(p, n)) for n in NAMES}
 
 
+# Parameter vectors in calibration.market order; values typical of fits to SPX.
+MARKET_PARAMS = {
+    "heston": [12.8, 0.05, 3.8, -0.76, 0.093],
+    "bates": [4.2, 0.034, 2.0, -0.84, 0.065, 0.77, -0.09, 0.11],
+    "double": [35.0, 0.024, 6.2, -0.78, 0.095, 0.53, 0.062, 1.3, -0.8, 0.024],
+}
+MARKET_SLICES = [(0.0219, 0.27), (0.25, 0.19), (2.1, 0.18)]
+SVI_SET = [0.01, 0.12, -0.6, 0.02, 0.15]
+
+
+def cplx(z: np.ndarray) -> list[list[float]]:
+    return [[float(v.real), float(v.imag)] for v in np.atleast_1d(z)]
+
+
+def market_fixtures() -> None:
+    u = np.array([0.3, 2.0, 15.0, 120.0])
+    u = np.concatenate([u + 0j, u - 0.5j, u - 1j])
+    out: dict = {"u": cplx(u), "models": {}, "svi": {}}
+    a, t = MARKET_SLICES[1]
+    nodes, weights = slice_nodes(a, t)
+    out["nodes"] = {"atm": a, "tau": t, "nodes": nodes.tolist(), "weights": weights.tolist()}
+    for name, p in MARKET_PARAMS.items():
+        spec = MODELS[name]
+        rows = []
+        for tau, atm in MARKET_SLICES:
+            cf = spec.cf(np.array(p), tau)
+            quad = slice_nodes(atm, tau)
+            sd = atm * np.sqrt(tau)
+            k = np.linspace(-3.0, 1.75, 9) * sd
+            x = np.linspace(-8.0, 4.0, 13) * sd
+            price = otm_price(cf, k, quad)
+            rows.append(
+                {
+                    "tau": tau,
+                    "atm": atm,
+                    "phi": cplx(cf(u)),
+                    "k": k.tolist(),
+                    "otm": price.tolist(),
+                    "iv": [
+                        None if not np.isfinite(v) else float(v)
+                        for v in implied_vol_otm(price, k, tau)
+                    ],
+                    "x": x.tolist(),
+                    "density": log_density(cf, x, density_nodes(atm, tau)).tolist(),
+                }
+            )
+        out["models"][name] = {"params": p, "slices": rows}
+    k = np.linspace(-0.6, 0.4, 11)
+    out["svi"] = {
+        "params": dict(zip(("a", "b", "rho", "m", "s"), SVI_SET, strict=True)),
+        "k": k.tolist(),
+        "w": svi_w(k, np.array(SVI_SET)).tolist(),
+        "g": svi_g(k, np.array(SVI_SET)).tolist(),
+        "density": svi_density(k, np.array(SVI_SET)).tolist(),
+    }
+    OUT_MARKET.write_text(json.dumps(out, separators=(",", ":")))
+    print(f"wrote {OUT_MARKET} ({OUT_MARKET.stat().st_size / 1024:.0f} KB)")
+
+
 def main() -> None:
+    market_fixtures()
     config = load_config(CONFIG_PATH)
     n_nodes = int(config["quadrature"]["n_nodes"])
     upper = float(config["quadrature"]["upper_limit"])
