@@ -45,12 +45,12 @@ export function App() {
       })
       .catch(() => setMarketError(true))
   }, [])
-  // The option snapshot (its own lazy chunk) is not needed by the attract loop.
+  // The option snapshot and its views (one lazy chunk each) drive the Market and Density tabs
+  // and the attract loop.
   useEffect(() => {
-    if (attract || spx) return
     loadSpx().then(setSpx).catch(() => setSpxError(true))
     import('./views/marketViews').then(setMv).catch(() => setSpxError(true))
-  }, [attract])
+  }, [])
 
   useEffect(() => {
     const on = () => go(fromHash(), false)
@@ -76,7 +76,11 @@ export function App() {
   const optionFit = spx ? { asOf: spx.asOf, params: spx.fits.heston.params as unknown as HestonParams } : null
 
   if (attract) {
-    return <Playground state={pg} setState={setPg} market={market} attract onInteract={() => setAttract(false)} />
+    const leave = () => {
+      setAttract(false)
+      if (!location.hash) go('market')
+    }
+    return mv ? <mv.Attract spx={spx} onInteract={leave} /> : <div class="attract" />
   }
 
   const onTabKey = (e: KeyboardEvent) => {

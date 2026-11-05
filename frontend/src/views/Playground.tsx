@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
 import { fixed, num, pct, pctTickFormat, signed, tenor } from '../lib/format'
-import { flags, useDebounced, useReducedMotion, useSize } from '../lib/hooks'
+import { flags, useDebounced, useSize } from '../lib/hooks'
 import type { MarketData } from '../lib/market'
 import { extent, linear, niceDomain, ticks } from '../lib/scale'
 import { makeGrid, type Grid } from '../math/surface'
@@ -77,12 +77,8 @@ export function Playground(props: {
   state: PlaygroundState
   setState: (s: PlaygroundState) => void
   market: MarketData | null
-  attract?: boolean
-  onInteract?: () => void
-  compact?: boolean
 }) {
   const { params, rate } = props.state
-  const reduced = useReducedMotion()
   const [res, setRes] = useState<Computed | null>(null)
   const [focus, setFocus] = useState<Key>('rho')
 
@@ -116,29 +112,11 @@ export function Playground(props: {
   useEffect(() => run({ params, rate, quality: 'draft' }), [params, rate])
   useEffect(() => run({ params: settled.params, rate: settled.rate, quality: 'fine' }), [settled])
 
-  // Attract mode: gently sweep rho / sigma / v0 until the visitor interacts.
-  const base = useRef(params)
-  useEffect(() => {
-    if (!props.attract || reduced) return
-    base.current = props.state.params
-    const t0 = performance.now()
-    const id = setInterval(() => {
-      const t = (performance.now() - t0) / 1000
-      props.setState({
-        rate,
-        params: {
-          ...base.current,
-          rho: Math.max(-0.95, Math.min(0.3, -0.45 + 0.42 * Math.sin(t * 0.42))),
-          sigma: 0.65 + 0.35 * Math.sin(t * 0.27 + 1.3),
-          v0: 0.034 + 0.022 * Math.sin(t * 0.19 + 2.1),
-        },
-      })
-    }, 90)
-    return () => clearInterval(id)
-  }, [props.attract, reduced])
+  // The surface turns slowly until the visitor first touches it or a slider.
+  const [idle, setIdle] = useState(true)
 
   const set = (k: Key, v: number) => {
-    props.onInteract?.()
+    setIdle(false)
     if (k === 'rate') props.setState({ params, rate: v })
     else props.setState({ params: { ...params, [k]: v }, rate })
   }
@@ -154,36 +132,6 @@ export function Playground(props: {
       : 'Computing the implied volatility surface.',
     400,
   )
-
-  if (props.attract) {
-    return (
-      <div class="attract">
-        <Surface3D
-          data={res?.surface ?? null}
-          xLabel="strike K/S"
-          xTick={xTickM}
-          xTicks={xTicksM}
-          xReadout={xReadoutM}
-          autoRotate={0.16}
-          onInteract={props.onInteract}
-          label={summary}
-          minimal
-          pad={{ top: 64, bottom: 46 }}
-        />
-        <div class="attract-overlay">
-          <p class="eyebrow">heston · regime · lab</p>
-          <h1>Implied-vol surface, priced live in your browser</h1>
-        </div>
-        <div class="attract-params" aria-hidden="true">
-          <span class="chip">ρ {fixed(params.rho, 2)}</span>
-          <span class="chip">σ {fixed(params.sigma, 2)}</span>
-          <span class="chip">√v₀ {pct(Math.sqrt(params.v0))}</span>
-          <span class="chip">atm 1y {pct(atm1y)}</span>
-        </div>
-        <div class="attract-cta">drag to explore</div>
-      </div>
-    )
-  }
 
   const presets: { label: string; params: HestonParams; color?: string }[] = [
     { label: 'textbook', params: TEXTBOOK },
@@ -219,7 +167,8 @@ export function Playground(props: {
           xTick={xTickM}
           xTicks={xTicksM}
           xReadout={xReadoutM}
-          onInteract={props.onInteract}
+          autoRotate={idle ? 0.07 : 0}
+          onInteract={() => setIdle(false)}
           label={summary}
           hint="drag to rotate · hover to read"
         />

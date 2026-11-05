@@ -13,7 +13,9 @@ public demo is a **fully static browser lab** that runs a TypeScript port of the
 
 **Live lab:** [heston.austxu.dev](https://heston.austxu.dev). Static files only, no server.
 Add `?embed=1` for an iframe layout without page chrome, or `?embed=1&autoplay=1` for an
-attract loop that rotates the surface and sweeps parameters until the visitor interacts.
+attract loop: Heston, Bates and double Heston take turns calibrating to the real SPX quotes
+on the rotating surface while a scoreboard fills in, until the visitor drags (which opens
+the Market tab).
 
 ## Architecture
 

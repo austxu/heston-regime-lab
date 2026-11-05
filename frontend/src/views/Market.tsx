@@ -27,12 +27,12 @@ const SMILE_N = 41
 const DECIMALS: Record<string, number> = { kappa: 2, theta: 4, sigma: 2, rho: 3, v0: 4, lam: 3, mu_j: 3, sigma_j: 3 }
 const decimalsOf = (name: string) => DECIMALS[name.replace(/[12]$/, '')] ?? 3
 
-const xTicksK = (lo: number, hi: number) => ticks(lo, hi, 4)
-const xTickK = (x: number) => fixed(x, 1)
-const xReadoutK = (x: number) => `ln(K/F)/√T = ${fixed(x, 3)}`
-const TAU_TICKS = [1 / 12, 0.25, 0.5, 1, 2]
+export const xTicksK = (lo: number, hi: number) => ticks(lo, hi, 4)
+export const xTickK = (x: number) => fixed(x, 1)
+export const xReadoutK = (x: number) => `ln(K/F)/√T = ${fixed(x, 3)}`
+export const TAU_TICKS = [1 / 12, 0.25, 0.5, 1, 2]
 
-function buildSetup(spx: SpxData) {
+export function buildSetup(spx: SpxData) {
   const slices: SpxSlice[] = spx.slices
   const qx = slices.flatMap((s) => s.k.map((k) => k / Math.sqrt(s.tau)))
   const qt = slices.flatMap((s) => s.k.map(() => s.tau))
@@ -58,7 +58,7 @@ function buildSetup(spx: SpxData) {
 }
 type Setup = ReturnType<typeof buildSetup>
 
-const startOf = (spx: SpxData, id: ModelId) => spx.fits[id].start
+export const startOf = (spx: SpxData, id: ModelId) => spx.fits[id].start
 const pyParams = (spx: SpxData, id: ModelId) => MODELS[id].names.map((n) => spx.fits[id].params[n])
 
 export function Market(props: { spx: SpxData | null; error: boolean; active: boolean; onUseParams: (p: HestonParams) => void }) {
