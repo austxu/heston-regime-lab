@@ -165,6 +165,16 @@ def test_svi_fit_recovers_parameters() -> None:
     np.testing.assert_allclose(np.sqrt(svi_w(k, p) / tau), iv, atol=1e-6)
 
 
+def test_svi_fit_respects_lee_wing_bound() -> None:
+    """A smile that wants a right wing steeper than Lee's bound is held at slope 2."""
+    tau = 0.04
+    k = np.linspace(-0.15, 0.09, 21)
+    steep = np.array([-0.02, 2.6, 0.975, 0.227, 0.037])  # b (1 + rho) ~ 5.1
+    iv = np.sqrt(svi_w(k, steep) / tau)
+    p, _ = fit_svi(k, iv, tau)
+    assert p[1] * (1 + p[2]) <= 2 + 1e-3 and p[1] * (1 - p[2]) <= 2 + 1e-3
+
+
 # ----------------------------------------------------------------- Cboe snapshot
 
 

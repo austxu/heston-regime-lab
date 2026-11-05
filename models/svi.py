@@ -69,23 +69,36 @@ def _inner_fit(k: np.ndarray, w: np.ndarray, m: float, s: float) -> np.ndarray:
     return np.array([a, c / s, rho, m, s])
 
 
-def fit_svi(k: np.ndarray, iv: np.ndarray, tau: float) -> tuple[np.ndarray, float]:
-    """SVI fit of one slice; returns (params, rmse_iv).
+def fit_svi(
+    k: np.ndarray, iv: np.ndarray, tau: float, check: tuple[float, float] | None = None
+) -> tuple[np.ndarray, float]:
+    """Arbitrage-aware SVI fit of one slice; returns (params, rmse_iv).
 
     A grid over (m, s) with the linear inner solve gives a robust start; a bounded
     least-squares polish in implied-vol space then minimises the same objective as the
-    models.  Bounds keep b >= 0, |rho| < 1 and s > 0, and a penalty keeps the minimum total
-    variance a + b s sqrt(1 - rho^2) non-negative.
+    models.  Unconstrained raw SVI fits to short-dated SPX smiles put a sharp vertex just
+    beyond the last quoted call and extrapolate a wing steeper than any arbitrage-free
+    smile allows, so the extrapolated density is not a density.  Hence:
+
+    * the vertex m stays inside the quoted strikes, b >= 0, |rho| < 1, s > 0;
+    * penalties keep the minimum total variance a + b s sqrt(1 - rho^2) >= 0 and both wing
+      slopes b (1 +- rho) within Roger Lee's moment bound of 2;
+    * a penalty keeps Gatheral's g(k) >= 0 (no butterfly arbitrage) on ``check``, the
+      log-moneyness range where the density is used (default: quotes padded by their span).
     """
     k = np.asarray(k, dtype=float)
     iv = np.asarray(iv, dtype=float)
     w_mkt = iv * iv * tau
     span = float(k.max() - k.min())
+    lo_k, hi_k = check if check is not None else (k.min() - span, k.max() + span)
+    k_check = np.linspace(lo_k, hi_k, 321)
 
     def resid(p: np.ndarray) -> np.ndarray:
         model = np.sqrt(np.maximum(svi_w(k, p), 1e-12) / tau)
         floor = p[0] + p[1] * p[4] * np.sqrt(1.0 - p[2] ** 2)
-        return np.append(model - iv, 10.0 * min(floor, 0.0))
+        wings = (2.0 - p[1] * (1.0 + p[2]), 2.0 - p[1] * (1.0 - p[2]))
+        penalties = [10.0 * min(floor, 0.0), *(10.0 * min(x, 0.0) for x in wings)]
+        return np.concatenate([model - iv, penalties, np.minimum(svi_g(k_check, p), 0.0)])
 
     starts = []
     for m in np.linspace(k.min(), k.max(), 15):
@@ -94,14 +107,14 @@ def fit_svi(k: np.ndarray, iv: np.ndarray, tau: float) -> tuple[np.ndarray, floa
             starts.append((float(np.sum(resid(p) ** 2)), p))
     starts.sort(key=lambda t: t[0])
 
-    lo = np.array([-1.0, 0.0, -0.999, k.min() - span, 1e-4])
-    hi = np.array([1.0, 50.0, 0.999, k.max() + span, 4.0 * span])
+    lo = np.array([-1.0, 0.0, -0.999, k.min(), 1e-4])
+    hi = np.array([1.0, 50.0, 0.999, k.max(), 4.0 * span])
     best: tuple[np.ndarray, float] | None = None
     for _, p0 in starts[:4]:
         sol = least_squares(
             resid, np.clip(p0, lo + 1e-9, hi - 1e-9), bounds=(lo, hi), method="trf", x_scale="jac"
         )
-        rmse = float(np.sqrt(np.mean(sol.fun[:-1] ** 2)))
+        rmse = float(np.sqrt(np.mean(sol.fun[: len(k)] ** 2)))
         if best is None or rmse < best[1]:
             best = (sol.x, rmse)
     assert best is not None

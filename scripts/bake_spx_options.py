@@ -77,8 +77,10 @@ def main() -> None:
     svi_out = []
     svi_iv = []
     for s in slices:
-        p, rmse = fit_svi(s.k, s.iv, s.tau)
-        grid = np.linspace(s.k.min() - 0.5 * np.ptp(s.k), s.k.max() + 0.5 * np.ptp(s.k), 801)
+        # No butterfly arbitrage on the density tab's grid, [-8a, 4a] with a = vol_atm sqrt(tau).
+        a = s.atm_vol * np.sqrt(s.tau)
+        p, rmse = fit_svi(s.k, s.iv, s.tau, check=(-8 * a, 4 * a))
+        grid = np.linspace(-8 * a, 4 * a, 2401)
         svi_out.append(
             {
                 **dict(zip(SVI_NAMES, (float(x) for x in p), strict=True)),
