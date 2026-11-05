@@ -53,7 +53,7 @@ const fitPoints = (ring: number) => {
   return pts
 }
 const FIT_WIDE = fitPoints(1.38)
-const FIT_SMALL = fitPoints(1.32)
+const FIT_SMALL = fitPoints(1.2)
 const FIT_MIN = fitPoints(1.02)
 const DIST = 7.5
 const DEFAULT_YAW = -0.52
@@ -684,8 +684,11 @@ export class SurfaceRenderer {
     ctx.textAlign = 'center'
     // Titles sit between two ticks so they never collide with a tick label.
     const mid = (arr: number[]) => (arr.length > 1 ? (arr[Math.floor((arr.length - 1) / 2)] + arr[Math.floor((arr.length - 1) / 2) + 1]) / 2 : arr[0])
-    label(xt.length > 1 ? this.wx(mid(xt)) : 0, frontY * (small ? 1.44 : 1.36), 0, this.opts.xLabel)
-    label(frontX * (small ? 1.34 : 1.42), tt.length > 1 ? this.wy(mid(tt)) : 0, 0, 'maturity')
+    // On narrow canvases the axis names move to the caption under the canvas instead.
+    if (!small) {
+      label(xt.length > 1 ? this.wx(mid(xt)) : 0, frontY * 1.36, 0, this.opts.xLabel)
+      label(frontX * 1.42, tt.length > 1 ? this.wy(mid(tt)) : 0, 0, 'maturity')
+    }
     label(best[0], best[1], BOX_H, 'implied vol', -7, -14)
   }
 

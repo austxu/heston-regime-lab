@@ -4,7 +4,7 @@ import { flags, useReducedMotion, useSize } from '../lib/hooks'
 import { REGIME_COLORS, type MarketData, type RegimeInfo } from '../lib/market'
 import { extent, linear, log, logTicks, niceDomain, ticks } from '../lib/scale'
 import { flatVolFit } from '../math/calibrate'
-import { strikeAt, xOfStrike, type Grid, type Quotes } from '../math/surface'
+import { hestonImpliedVols, strikeAt, xOfStrike, type Grid, type Quotes } from '../math/surface'
 import { INITIAL_GUESS, PARAM_NAMES, type HestonParams, type ParamName } from '../math/types'
 import type { SurfaceData, SurfacePoint } from '../render/surface3d'
 import { AxisBottom, AxisLeft, GridY, linePath } from '../ui/axes'
@@ -97,13 +97,17 @@ export function Calibration(props: {
       request({ type: 'surface', params: INITIAL_GUESS, market: setup.quotes, grid: setup.smileGrid, quality: 'fine' }, 'surface'),
     ]).then(([s, sm]) => {
       if (!live) return
+      // 48 quotes price in a couple of milliseconds, so the starting residuals are computed here.
+      const modelIv = hestonImpliedVols(INITIAL_GUESS, setup.quotes, { xtol: 1e-10 })
+      let loss = 0
+      modelIv.forEach((v, i) => (loss += (Number.isFinite(v) ? v - setup.quotes.iv[i] : 10) ** 2))
       setStart({
         iteration: 0,
-        loss: Number.NaN,
-        rmse: Number.NaN,
+        loss,
+        rmse: Math.sqrt(loss / modelIv.length),
         params: INITIAL_GUESS,
-        nfev: 0,
-        modelIv: new Float64Array(0),
+        nfev: 1,
+        modelIv,
         surface: { grid: setup.surfGrid, iv: s.iv, flag: s.flag },
         smiles: sm.iv,
       })
@@ -423,7 +427,7 @@ function FitTable(p: { regime: RegimeInfo; final: CalibDoneMsg['result'] | null;
         fit · browser vs python, same {p.n} quotes
       </p>
       <div class="table-wrap">
-        <table class="data">
+        <table class="data tight">
           <caption class="sr-only">Calibrated parameters and fit quality: generating values, browser Levenberg–Marquardt, Python L-BFGS-B</caption>
           <thead>
             <tr>
@@ -449,17 +453,17 @@ function FitTable(p: { regime: RegimeInfo; final: CalibDoneMsg['result'] | null;
               <td>{num(py.rmseIv * 100, 4)}</td>
             </tr>
             <tr>
-              <td class="lead">evals · time</td>
+              <td class="lead">fev · time</td>
               <td>—</td>
-              <td>{f ? `${f.nfev} · ${f.ms.toFixed(0)} ms` : '—'}</td>
+              <td>{f ? `${f.nfev} · ${f.ms.toFixed(0)}ms` : '—'}</td>
               <td>
-                {py.nfev} · {num(py.seconds, 1)} s
+                {py.nfev} · {num(py.seconds, 1)}s
               </td>
             </tr>
             <tr>
               <td class="lead">flat BS</td>
               <td colSpan={3} class="wrap">
-                One vol for every quote, σ̂ = {pct(p.flat.sigma, 2)}: rmse {num(p.flat.rmseIv * 100, 3)} vp
+                One vol for every quote ({pct(p.flat.sigma, 2)}): rmse {num(p.flat.rmseIv * 100, 3)} vp
                 {f ? `, ${num(p.flat.rmseIv / f.rmseIv, 1)}× the Heston error.` : '.'}
               </td>
             </tr>

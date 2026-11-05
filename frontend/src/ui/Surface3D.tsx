@@ -79,7 +79,12 @@ export function Surface3D(p: Props) {
           {hover.flagged && <div class="warn">wing below quadrature floor · extrapolated</div>}
         </div>
       )}
-      {p.hint && <div class="surface-hint">{TOUCH ? p.hint.replace('hover', 'tap') : p.hint}</div>}
+      {p.hint && (
+        <div class="surface-hint">
+          <span class="narrow-only">axes: {p.xLabel} × maturity · </span>
+          {TOUCH ? p.hint.replace('hover', 'tap') : p.hint}
+        </div>
+      )}
     </div>
   )
 }

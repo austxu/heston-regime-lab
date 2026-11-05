@@ -353,6 +353,14 @@ a:hover {
   color: var(--faint);
   pointer-events: none;
 }
+.narrow-only {
+  display: none;
+}
+@media (max-width: 520px) {
+  .narrow-only {
+    display: inline;
+  }
+}
 .tooltip {
   position: absolute;
   z-index: 5;
@@ -665,6 +673,11 @@ table.data td {
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
 }
+table.data.tight th,
+table.data.tight td {
+  padding-left: 4px;
+  padding-right: 4px;
+}
 table.data td.wrap {
   white-space: normal;
   text-align: left;
@@ -695,6 +708,7 @@ table.data .best {
 
 .v-surface {
   align-items: start;
+  grid-template-rows: auto 1fr;
   grid-template-columns: minmax(0, 1fr) 340px;
   grid-template-areas:
     'surface controls'
@@ -787,6 +801,7 @@ table.data .best {
 
 .v-calib {
   align-items: start;
+  grid-template-rows: auto 1fr;
   grid-template-columns: minmax(0, 1fr) 380px;
   grid-template-areas:
     'surface side'
