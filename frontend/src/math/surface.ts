@@ -75,14 +75,28 @@ export function hestonImpliedVols(
 }
 
 export interface Grid {
-  /** Moneyness K / S along the strike axis. */
-  m: number[]
+  /**
+   * Strike-axis coordinate. kind 'm': moneyness K / S. kind 'k': forward log-moneyness per
+   * root-year, ln(K / F) / sqrt(T) — a delta-like axis on which market quotes are rectangular.
+   */
+  x: number[]
   /** Maturities in years along the time axis. */
   tau: number[]
+  kind: 'm' | 'k'
+}
+
+export function strikeAt(grid: Pick<Grid, 'kind'>, x: number, tau: number, m: Market): number {
+  if (grid.kind === 'm') return m.spot * x
+  return m.spot * Math.exp((m.rate - m.div) * tau + x * Math.sqrt(tau))
+}
+
+export function xOfStrike(kind: Grid['kind'], strike: number, tau: number, m: Market): number {
+  if (kind === 'm') return strike / m.spot
+  return (Math.log(strike / m.spot) - (m.rate - m.div) * tau) / Math.sqrt(tau)
 }
 
 export interface SurfaceResult {
-  /** Row-major IV, index [i * m.length + j] for tau[i], m[j]. */
+  /** Row-major IV, index [i * x.length + j] for tau[i], x[j]. */
   iv: Float64Array
   /** 1 where the quote sits below the quadrature floor and was flat-extrapolated. */
   flag: Uint8Array
@@ -95,7 +109,7 @@ export interface SurfaceResult {
  */
 export function surfaceGrid(p: HestonParams, market: Market, grid: Grid, opts: IvOptions = {}): SurfaceResult {
   const { nNodes = QUAD.nNodes, upper = QUAD.upperLimit, xtol = 1e-8 } = opts
-  const nm = grid.m.length
+  const nm = grid.x.length
   const iv = new Float64Array(grid.tau.length * nm)
   const flag = new Uint8Array(grid.tau.length * nm)
   for (let i = 0; i < grid.tau.length; i++) {
@@ -103,7 +117,7 @@ export function surfaceGrid(p: HestonParams, market: Market, grid: Grid, opts: I
     const k = maturityKernel(p, market.spot, market.rate, market.div, tau, nNodes, upper)
     const discS = market.spot * Math.exp(-market.div * tau)
     for (let j = 0; j < nm; j++) {
-      const strike = market.spot * grid.m[j]
+      const strike = strikeAt(grid, grid.x[j], tau, market)
       const raw = kernelCall(k, market.spot, strike, market.rate, market.div)
       const discK = strike * Math.exp(-market.rate * tau)
       const call = Math.min(Math.max(raw, Math.max(discS - discK, 0)), discS)
@@ -150,11 +164,11 @@ function fillRow(iv: Float64Array, flag: Uint8Array, off: number, n: number) {
   }
 }
 
-/** Display grid: moneyness evenly spaced, maturities evenly spaced in sqrt(time). */
-export function makeGrid(nm: number, nt: number, mLo = 0.8, mHi = 1.2, tLo = 1 / 12, tHi = 2): Grid {
-  const m = Array.from({ length: nm }, (_, j) => mLo + ((mHi - mLo) * j) / (nm - 1))
+/** Display grid: strike axis evenly spaced, maturities evenly spaced in sqrt(time). */
+export function makeGrid(nx: number, nt: number, xLo = 0.8, xHi = 1.2, tLo = 1 / 12, tHi = 2, kind: Grid['kind'] = 'm'): Grid {
+  const x = Array.from({ length: nx }, (_, j) => xLo + ((xHi - xLo) * j) / (nx - 1))
   const a = Math.sqrt(tLo)
   const b = Math.sqrt(tHi)
   const tau = Array.from({ length: nt }, (_, i) => (a + ((b - a) * i) / (nt - 1)) ** 2)
-  return { m, tau }
+  return { x, tau, kind }
 }

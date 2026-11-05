@@ -2,17 +2,49 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0a0e16" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Heston Regime Lab · volatility surfaces in the browser</title>
     <meta
       name="description"
-      content="Interactive Heston calibration, implied-volatility surfaces, and market-regime analytics."
+      content="Price, calibrate and stress the Heston stochastic-volatility model live in your browser: an implied-volatility surface playground, calibration replay, HMM market regimes on real S&amp;P 500 and VIX history, and Monte Carlo paths."
     />
-    <title>heston·regime·lab</title>
+    <link rel="canonical" href="https://heston.austxu.dev/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#13161b" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="author" content="Austin Xu" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="austxu.dev" />
+    <meta property="og:title" content="Heston Regime Lab" />
+    <meta
+      property="og:description"
+      content="An instrument for stochastic volatility: live Heston pricing and calibration in the browser, with market regimes fitted to real S&amp;P 500 and VIX history."
+    />
+    <meta property="og:url" content="https://heston.austxu.dev/" />
+    <meta property="og:image" content="https://heston.austxu.dev/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A Heston implied-volatility surface rendered in purple and ember on a dark background." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Heston Regime Lab" />
+    <meta name="twitter:description" content="Live Heston pricing, calibration and HMM market regimes, all in the browser." />
+    <meta name="twitter:image" content="https://heston.austxu.dev/og.png" />
+    <style>
+      html,
+      body {
+        background: #13161b;
+        color: #f7f7f7;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; padding: 24px; color: #cecfd2">
+        Heston Regime Lab runs its pricing and calibration in JavaScript. Please enable JavaScript to use it.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

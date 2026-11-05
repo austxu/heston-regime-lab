@@ -1,34 +1,31 @@
-// Small formatting helpers shared across views.
-
-export const pct = (x: number, digits = 2): string => `${(x * 100).toFixed(digits)}%`
-
-export const fixed = (x: number, digits = 4): string =>
-  Number.isFinite(x) ? x.toFixed(digits) : '—'
-
-export const num = (x: number, digits = 2): string =>
-  Number.isFinite(x) ? x.toLocaleString(undefined, { maximumFractionDigits: digits }) : '—'
-
-/** Format an exchange/market date without shifting date-only ISO values across time zones. */
-export function marketDate(iso: string): string {
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(iso)
-  const parsed = new Date(dateOnly ? `${iso}T00:00:00Z` : iso)
-  if (Number.isNaN(parsed.getTime())) return iso
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    ...(dateOnly ? { timeZone: 'UTC' } : {}),
-  }).format(parsed)
+/** Consistent number formatting for every readout and axis. */
+export const pct = (v: number, d = 1) => (Number.isFinite(v) ? `${(v * 100).toFixed(d)}%` : '—')
+export const volPts = (v: number, d = 2) => (Number.isFinite(v) ? `${(v * 100).toFixed(d)}` : '—')
+export const num = (v: number, d = 2) =>
+  Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—'
+export const signed = (v: number, d = 2) => (Number.isFinite(v) ? `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}` : '—')
+export const minus = (s: string) => s.replace(/^-/, '−')
+export const fixed = (v: number, d = 3) => (Number.isFinite(v) ? minus(v.toFixed(d)) : '—')
+export const sci = (v: number, d = 2) => {
+  if (!Number.isFinite(v) || v === 0) return Number.isFinite(v) ? '0' : '—'
+  const e = Math.floor(Math.log10(Math.abs(v)))
+  const m = v / 10 ** e
+  return `${minus(m.toFixed(d))}e${e < 0 ? '−' : ''}${Math.abs(e)}`
 }
+export const tenor = (tau: number) => {
+  const months = tau * 12
+  if (Math.abs(months - Math.round(months)) < 0.05 && months < 12) return `${Math.round(months)}m`
+  if (tau >= 1 && Math.abs(tau - Math.round(tau)) < 0.02) return `${Math.round(tau)}y`
+  return months < 12 ? `${months.toFixed(1)}m` : `${tau.toFixed(1)}y`
+}
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+export const dateLabel = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+export const monthLabel = (d: Date) => `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+export const isoDate = (d: Date) => d.toISOString().slice(0, 10)
 
-/** Relative "time ago" for staleness display. */
-export function timeAgo(iso: string | null | undefined): string {
-  if (!iso) return 'unknown'
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return 'unknown'
-  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
-  if (secs < 60) return `${secs}s ago`
-  const mins = Math.round(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.round(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.round(hrs / 24)}d ago`
+/** A percent formatter with just enough decimals to keep every tick label distinct. */
+export const pctTickFormat = (ticks: number[], suffix = '%') => {
+  const step = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) * 100 : 1
+  const d = Math.max(0, Math.min(3, Math.ceil(-Math.log10(step) + 1e-9)))
+  return (v: number) => `${(v * 100).toFixed(d)}${suffix}`
 }

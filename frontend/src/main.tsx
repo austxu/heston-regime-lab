@@ -1,23 +1,10 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { QueryClientProvider } from '@tanstack/react-query'
-import './index.css'
-import App from './App'
-import { queryClient } from './lib/queryClient'
-import { DataModeProvider } from './lib/dataMode'
-import { ErrorBoundary } from './components/ui/ErrorBoundary'
+import '@fontsource/inter/latin-400.css'
+import '@fontsource/inter/latin-500.css'
+import '@fontsource/inter/latin-600.css'
+import '@fontsource/roboto-mono/latin-400.css'
+import '@fontsource/roboto-mono/latin-500.css'
+import './styles/app.css'
+import { render } from 'preact'
+import { App } from './App'
 
-const rootElement = document.getElementById('root')
-if (!rootElement) throw new Error('Missing #root application mount point')
-
-createRoot(rootElement).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <DataModeProvider>
-        <ErrorBoundary label="the application">
-          <App />
-        </ErrorBoundary>
-      </DataModeProvider>
-    </QueryClientProvider>
-  </StrictMode>,
-)
+render(<App />, document.getElementById('root')!)

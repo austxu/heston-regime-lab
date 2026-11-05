@@ -329,6 +329,7 @@ def main() -> None:
             "covariance": config["hmm"]["covariance_type"],
             "transmat": [_round(row, 5) for row in transmat],
             "means": [_round(row, 4) for row in means],
+            "logLik": round(float(hmm_raw.score(Xs)), 2),
         },
         "latestRate": round(latest_rate, 6),
         "estimation": {
