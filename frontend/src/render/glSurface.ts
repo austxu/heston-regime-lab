@@ -1,10 +1,16 @@
 /**
  * WebGL2 layer for the 3D surface: a bicubically refined mesh with per-vertex normals,
- * Blinn-Phong lighting, analytic grid lines, a projected IV contour map on the floor and
- * depth-tested market quotes with residual stems. It shares SurfaceRenderer's camera (the
- * same projection, written as a clip-space transform), so the canvas-2D layers above and
- * below it (axes, labels, hover) line up exactly. SurfaceRenderer falls back to its own
- * canvas-2D painter whenever this layer cannot be created or its context is lost.
+ * Blinn-Phong lighting, analytic grid lines, a projected IV contour map on the floor,
+ * depth-tested market quotes with residual stems and an optional wireframe target surface.
+ * It shares SurfaceRenderer's camera (the same projection, written as a clip-space
+ * transform), so the canvas-2D layers above and below it (axes, labels, hover) line up
+ * exactly. SurfaceRenderer falls back to its own canvas-2D painter whenever this layer cannot
+ * be created or its context is lost.
+ *
+ * The effects mode (attract loop only) adds a mirror reflection under the floor, bright grid
+ * lines with a light scan sweeping across maturities, a rim light, and bloom: the scene is
+ * rendered into a multisampled framebuffer, its bright parts are blurred at half resolution
+ * and added back.
  */
 import { LUT } from './colormap'
 
@@ -31,6 +37,11 @@ export interface GlMesh {
   flag: ArrayLike<number> | null
 }
 
+/** Effects-mode state: the scan light's clock, in seconds. */
+export interface GlFx {
+  time: number
+}
+
 export interface GlPoint {
   wx: number
   wy: number
@@ -48,12 +59,13 @@ uniform vec4 uRot;   // cos yaw, sin yaw, cos pitch, sin pitch
 uniform vec4 uView;  // scale, cx, cy, dist (CSS px)
 uniform vec2 uSize;  // CSS w, h
 uniform vec3 uZ;     // zLo, zHi, box height
-uniform float uFloor;
+uniform float uMode; // 0 surface, 1 floor projection, 2 mirror reflection
 uniform float uPointSize;
 out float vT;
 out vec3 vN;
 out vec2 vUV;
 out float vFlag;
+out vec3 vW;
 vec4 project(vec3 p) {
   float xr = p.x * uRot.x - p.y * uRot.y;
   float yr = p.x * uRot.y + p.y * uRot.x;
@@ -69,8 +81,10 @@ vec4 project(vec3 p) {
 }
 void main() {
   vT = (aZ - uZ.x) / (uZ.y - uZ.x);
-  float z = uFloor > 0.5 ? 0.0 : vT * uZ.z;
-  gl_Position = project(vec3(aXY, z));
+  float h = clamp(vT, 0.0, 1.2) * uZ.z;
+  float z = uMode > 1.5 ? -h : uMode > 0.5 ? 0.0 : vT * uZ.z;
+  vW = vec3(aXY, z);
+  gl_Position = project(vW);
   gl_PointSize = uPointSize;
   // Normal into view space: (screen x, up, toward the camera).
   float xr = aN.x * uRot.x - aN.y * uRot.y;
@@ -86,20 +100,38 @@ in float vT;
 in vec3 vN;
 in vec2 vUV;
 in float vFlag;
+in vec3 vW;
 uniform sampler2D uLut;
-uniform float uFloor;
+uniform float uMode;
 uniform float uContour;
+uniform float uFx;
+uniform float uTime;
+uniform float uNt;
+uniform float uBoxH;
+uniform vec3 uCam;
 out vec4 o;
 void main() {
   vec3 base = texture(uLut, vec2(clamp(vT, 0.0, 1.0), 0.5)).rgb;
   float grey = dot(base, vec3(0.3, 0.59, 0.11));
   base = mix(base, vec3(grey * 0.55), vFlag * 0.65);
-  if (uFloor > 0.5) {
+  if (uMode > 1.5) {
+    // Mirror image below a glossy floor: keep only fragments whose view ray crosses the
+    // floor inside the box, fading with depth below it.
+    float s = uCam.z / (uCam.z - vW.z);
+    vec2 q = uCam.xy + (vW.xy - uCam.xy) * s;
+    if (abs(q.x) > 1.0 || abs(q.y) > 1.0) discard;
+    float fade = pow(1.0 - clamp(-vW.z / (0.85 * uBoxH), 0.0, 1.0), 2.0);
+    float a = 0.6 * fade;
+    o = vec4(base * a, a);
+    return;
+  }
+  if (uMode > 0.5) {
     // Floor: a dim projection of the surface with iso-vol contour lines.
     float c = vT / uContour;
     float line = 1.0 - min(abs(fract(c - 0.5) - 0.5) / max(fwidth(c), 1e-4), 1.0);
     vec3 col = base * 0.42 + line * 0.25;
-    o = vec4(col * 0.5, 0.5);
+    float a = uFx > 0.5 ? 0.3 : 0.5;
+    o = vec4(col * a, a);
     return;
   }
   vec3 n = normalize(vN);
@@ -115,7 +147,16 @@ void main() {
   // Analytic grid lines along the computed grid (one per solved row / column).
   vec2 g = abs(fract(vUV - 0.5) - 0.5) / max(fwidth(vUV), vec2(1e-4));
   float line = 1.0 - min(min(g.x, g.y), 1.0);
-  col = mix(col, col * 0.5, line * 0.45);
+  if (uFx > 0.5) {
+    // Bright grid lines, a band of light sweeping from short to long maturities, rim light.
+    float ph = fract(uTime * 0.16) * 1.6 - 0.3;
+    float band = exp(-pow((vUV.y / uNt - ph) * 8.0, 2.0));
+    vec3 glowc = mix(base, vec3(1.0), 0.4);
+    col = mix(col, glowc, line * (0.22 + 0.6 * band)) + base * band * 0.14;
+    col += vec3(0.62, 0.47, 0.93) * pow(1.0 - n.z, 2.5) * 0.3;
+  } else {
+    col = mix(col, col * 0.5, line * 0.45);
+  }
   o = vec4(col, 1.0);
 }`
 
@@ -152,18 +193,78 @@ uniform float uAlpha;
 out vec4 o;
 void main() {
   if (uDisc < 0.5) { o = vec4(vC.rgb * vC.a * uAlpha, vC.a * uAlpha); return; }
-  // A solid disc (inner 55%) with a warm-white core, plus a soft ember glow to the edge.
+  // A plain anti-aliased disc.
   vec2 d = gl_PointCoord * 2.0 - 1.0;
   float r = length(d);
   float aa = fwidth(r);
-  float disc = 1.0 - smoothstep(0.55 - aa, 0.55 + aa, r);
-  float glow = (1.0 - smoothstep(0.55, 1.0, r)) * 0.32;
-  float a = max(disc, glow) * uAlpha;
+  float a = (1.0 - smoothstep(1.0 - 2.0 * aa, 1.0, r)) * uAlpha;
   if (a <= 0.003) discard;
-  vec3 core = mix(vec3(1.0, 0.95, 0.9), vC.rgb, smoothstep(0.05, 0.5, r));
-  vec3 col = mix(vC.rgb, core, disc);
-  o = vec4(col * a, a);
+  o = vec4(vC.rgb * a, a);
 }`
+
+// Post-processing: one fullscreen triangle (no attributes), bright pass, blur, composite.
+const QVS = `#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`
+
+const BRIGHT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+out vec4 o;
+void main() {
+  vec4 c = texture(uSrc, vUv);
+  float lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+  o = vec4(c.rgb * smoothstep(0.6, 1.0, lum), 1.0);
+}`
+
+const BLUR = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform vec2 uDir;
+out vec4 o;
+void main() {
+  // 9-tap Gaussian (sigma ~2 texels) along uDir.
+  vec3 c = texture(uSrc, vUv).rgb * 0.2270;
+  c += (texture(uSrc, vUv + uDir).rgb + texture(uSrc, vUv - uDir).rgb) * 0.1946;
+  c += (texture(uSrc, vUv + 2.0 * uDir).rgb + texture(uSrc, vUv - 2.0 * uDir).rgb) * 0.1216;
+  c += (texture(uSrc, vUv + 3.0 * uDir).rgb + texture(uSrc, vUv - 3.0 * uDir).rgb) * 0.0540;
+  c += (texture(uSrc, vUv + 4.0 * uDir).rgb + texture(uSrc, vUv - 4.0 * uDir).rgb) * 0.0162;
+  o = vec4(c, 1.0);
+}`
+
+const COMPOSITE = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform float uStrength;
+out vec4 o;
+void main() {
+  vec4 c = texture(uScene, vUv);
+  // Screen blend: the glow brightens without ever clipping to white.
+  vec3 glow = texture(uBloom, vUv).rgb * uStrength;
+  vec3 rgb = c.rgb + glow * (1.0 - c.rgb);
+  // Stay premultiplied: alpha is at least the brightest channel of the added glow.
+  float a = clamp(max(c.a, max(rgb.r, max(rgb.g, rgb.b))), 0.0, 1.0);
+  o = vec4(min(rgb, vec3(a)), a);
+}`
+
+interface Bloom {
+  w: number
+  h: number
+  msaa: WebGLFramebuffer
+  scene: WebGLFramebuffer
+  sceneTex: WebGLTexture
+  half: [WebGLFramebuffer, WebGLFramebuffer]
+  halfTex: [WebGLTexture, WebGLTexture]
+  drop: () => void
+}
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram | null {
   const mk = (type: number, src: string) => {
@@ -201,6 +302,9 @@ export class GlSurface {
   private pvao: WebGLVertexArrayObject
   private buf: Record<'xy' | 'z' | 'n' | 'uv' | 'flag' | 'idx' | 'p' | 'c', WebGLBuffer>
   private tex: WebGLTexture
+  private post: { bright: WebGLProgram; blur: WebGLProgram; composite: WebGLProgram; vao: WebGLVertexArrayObject } | null
+  private bloom: Bloom | null = null
+  private bloomFailed = false
   private nIdx = 0
   private shape = ''
   private rx = 0
@@ -224,6 +328,10 @@ export class GlSurface {
     this.gl = gl
     this.prog = prog
     this.pprog = pprog
+    const bright = compile(gl, QVS, BRIGHT)
+    const blur = compile(gl, QVS, BLUR)
+    const composite = compile(gl, QVS, COMPOSITE)
+    this.post = bright && blur && composite ? { bright, blur, composite, vao: gl.createVertexArray()! } : null
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault()
       this.lost = true
@@ -275,6 +383,118 @@ export class GlSurface {
     }
   }
 
+  /** Framebuffers for bloom at the current drawing-buffer size; null if unsupported. */
+  private bloomTargets(): Bloom | null {
+    const gl = this.gl
+    const w = gl.drawingBufferWidth
+    const h = gl.drawingBufferHeight
+    if (this.bloom && this.bloom.w === w && this.bloom.h === h) return this.bloom
+    this.bloom?.drop()
+    this.bloom = null
+    if (this.bloomFailed || !this.post) return null
+    const rbs: WebGLRenderbuffer[] = []
+    const texs: WebGLTexture[] = []
+    const fbs: WebGLFramebuffer[] = []
+    const tex = (tw: number, th: number) => {
+      const t = gl.createTexture()!
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      texs.push(t)
+      return t
+    }
+    const fbTex = (t: WebGLTexture) => {
+      const fb = gl.createFramebuffer()!
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0)
+      fbs.push(fb)
+      return fb
+    }
+    const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number)
+    const msaa = gl.createFramebuffer()!
+    fbs.push(msaa)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, msaa)
+    for (const [fmt, att] of [
+      [gl.RGBA8, gl.COLOR_ATTACHMENT0],
+      [gl.DEPTH_COMPONENT24, gl.DEPTH_ATTACHMENT],
+    ] as const) {
+      const rb = gl.createRenderbuffer()!
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rb)
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, fmt, w, h)
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, att, gl.RENDERBUFFER, rb)
+      rbs.push(rb)
+    }
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+    const sceneTex = tex(w, h)
+    const scene = fbTex(sceneTex)
+    const hw = Math.max(1, w >> 1)
+    const hh = Math.max(1, h >> 1)
+    const halfTex: [WebGLTexture, WebGLTexture] = [tex(hw, hh), tex(hw, hh)]
+    const half: [WebGLFramebuffer, WebGLFramebuffer] = [fbTex(halfTex[0]), fbTex(halfTex[1])]
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    const drop = () => {
+      rbs.forEach((r) => gl.deleteRenderbuffer(r))
+      texs.forEach((t) => gl.deleteTexture(t))
+      fbs.forEach((f) => gl.deleteFramebuffer(f))
+    }
+    if (!ok) {
+      drop()
+      this.bloomFailed = true
+      return null
+    }
+    this.bloom = { w, h, msaa, scene, sceneTex, half, halfTex, drop }
+    return this.bloom
+  }
+
+  /** Bright pass, two blur passes at half resolution, composite onto the canvas. */
+  private applyBloom(b: Bloom) {
+    const gl = this.gl
+    const post = this.post!
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, b.msaa)
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, b.scene)
+    gl.blitFramebuffer(0, 0, b.w, b.h, 0, 0, b.w, b.h, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+    gl.disable(gl.DEPTH_TEST)
+    gl.disable(gl.BLEND)
+    gl.bindVertexArray(post.vao)
+    const pass = (prog: WebGLProgram, src: WebGLTexture, dst: WebGLFramebuffer | null, vw: number, vh: number, set?: (u: (n: string) => WebGLUniformLocation | null) => void) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, dst)
+      gl.viewport(0, 0, vw, vh)
+      gl.useProgram(prog)
+      const u = (n: string) => gl.getUniformLocation(prog, n)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, src)
+      gl.uniform1i(u('uSrc'), 0)
+      set?.(u)
+      gl.drawArrays(gl.TRIANGLES, 0, 3)
+    }
+    const hw = Math.max(1, b.w >> 1)
+    const hh = Math.max(1, b.h >> 1)
+    pass(post.bright, b.sceneTex, b.half[0], hw, hh)
+    for (let k = 0; k < 2; k++) {
+      pass(post.blur, b.halfTex[0], b.half[1], hw, hh, (u) => gl.uniform2f(u('uDir'), (1 + k) / hw, 0))
+      pass(post.blur, b.halfTex[1], b.half[0], hw, hh, (u) => gl.uniform2f(u('uDir'), 0, (1 + k) / hh))
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, b.w, b.h)
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.useProgram(post.composite)
+    const u = (n: string) => gl.getUniformLocation(post.composite, n)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, b.sceneTex)
+    gl.uniform1i(u('uScene'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, b.halfTex[0])
+    gl.uniform1i(u('uBloom'), 1)
+    gl.uniform1f(u('uStrength'), 0.85)
+    gl.drawArrays(gl.TRIANGLES, 0, 3)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.enable(gl.BLEND)
+  }
+
   /** Refined mesh layout (indices, uv) only changes with the grid shape. */
   private layout(nx: number, nt: number) {
     const key = `${nx}x${nt}`
@@ -306,7 +526,11 @@ export class GlSurface {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW)
   }
 
-  draw(cam: GlCamera, mesh: GlMesh, points: GlPoint[], contourStep: number) {
+  /**
+   * Draw one frame. `wire`, on the same grid as `mesh`, is drawn as a wireframe (the market
+   * surface the model is being fitted to); `fx` turns on the effects mode.
+   */
+  draw(cam: GlCamera, mesh: GlMesh, points: GlPoint[], contourStep: number, fx: GlFx | null = null, wire: ArrayLike<number> | null = null) {
     const gl = this.gl
     if (this.lost || gl.isContextLost()) {
       this.lost = true
@@ -377,6 +601,8 @@ export class GlSurface {
     up(this.buf.n, nrm)
     up(this.buf.flag, fl)
 
+    const bloom = fx ? this.bloomTargets() : null
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloom ? bloom.msaa : null)
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
     gl.clearColor(0, 0, 0, 0)
     gl.clearDepth(1)
@@ -398,15 +624,62 @@ export class GlSurface {
     gl.bindTexture(gl.TEXTURE_2D, this.tex)
     gl.uniform1i(u('uLut'), 0)
     gl.uniform1f(u('uContour'), contourStep / (cam.zHi - cam.zLo))
+    gl.uniform1f(u('uFx'), fx ? 1 : 0)
+    gl.uniform1f(u('uTime'), fx ? fx.time : 0)
+    gl.uniform1f(u('uNt'), Math.max(1, nt - 1))
+    gl.uniform1f(u('uBoxH'), cam.boxH)
+    // Camera position in world space (the inverse of the view rotation applied to the eye).
+    const ce = Math.cos(cam.pitch)
+    const se = Math.sin(cam.pitch)
+    gl.uniform3f(u('uCam'), -cam.dist * ce * Math.sin(cam.yaw), -cam.dist * ce * Math.cos(cam.yaw), cam.dist * se + cam.boxH / 2)
     gl.bindVertexArray(this.vao)
-    // Floor projection first, without depth, then the lit surface with depth.
+    // Reflection and floor projection first, without depth, then the lit surface with depth.
     gl.disable(gl.DEPTH_TEST)
-    gl.uniform1f(u('uFloor'), 1)
+    if (fx) {
+      gl.uniform1f(u('uMode'), 2)
+      gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_SHORT, 0)
+    }
+    gl.uniform1f(u('uMode'), 1)
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_SHORT, 0)
     gl.enable(gl.DEPTH_TEST)
     gl.depthFunc(gl.LEQUAL)
-    gl.uniform1f(u('uFloor'), 0)
+    gl.uniform1f(u('uMode'), 0)
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_SHORT, 0)
+
+    if (wire) {
+      // Wireframe target on the solved grid: rows and columns as line segments, faint where
+      // hidden behind the surface.
+      const zf = (iv: number) => ((iv - cam.zLo) / (cam.zHi - cam.zLo)) * cam.boxH
+      const segs: number[] = []
+      for (let i = 0; i < nt; i++)
+        for (let j = 0; j < nx; j++) {
+          const a = i * nx + j
+          if (j + 1 < nx) segs.push(mesh.wx[j], mesh.wy[i], zf(wire[a]), mesh.wx[j + 1], mesh.wy[i], zf(wire[a + 1]))
+          if (i + 1 < nt) segs.push(mesh.wx[j], mesh.wy[i], zf(wire[a]), mesh.wx[j], mesh.wy[i + 1], zf(wire[a + nx]))
+        }
+      const pos = Float32Array.from(segs)
+      const V = pos.length / 3
+      const col = new Float32Array(V * 4)
+      for (let k = 0; k < V; k++) col.set([0.98, 0.62, 0.52, 0.9], k * 4)
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.p)
+      gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW)
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf.c)
+      gl.bufferData(gl.ARRAY_BUFFER, col, gl.DYNAMIC_DRAW)
+      u = setCommon(this.pprog)
+      gl.bindVertexArray(this.pvao)
+      gl.uniform1f(u('uDisc'), 0)
+      gl.depthMask(false)
+      for (const [fn, alpha] of [
+        [gl.GREATER, 0.22],
+        [gl.LEQUAL, 1],
+      ] as const) {
+        gl.depthFunc(fn)
+        gl.uniform1f(u('uAlpha'), alpha)
+        gl.drawArrays(gl.LINES, 0, V)
+      }
+      gl.depthMask(true)
+      gl.depthFunc(gl.LEQUAL)
+    }
 
     if (points.length) {
       // Stems (model minus quote) as lines, then the quotes as anti-aliased discs.
@@ -432,7 +705,7 @@ export class GlSurface {
       gl.bufferData(gl.ARRAY_BUFFER, col.subarray(0, (stemVerts + P) * 4), gl.DYNAMIC_DRAW)
       u = setCommon(this.pprog)
       gl.bindVertexArray(this.pvao)
-      gl.uniform1f(u('uPointSize'), (cam.w < 480 ? 8 : 10) * cam.dpr)
+      gl.uniform1f(u('uPointSize'), (cam.w < 480 ? 4.5 : 5.5) * cam.dpr)
       // Quotes and stems never write depth; the parts behind the surface are drawn faintly
       // first (depth GREATER) instead of being clipped, then the visible parts in full.
       gl.depthMask(false)
@@ -450,6 +723,7 @@ export class GlSurface {
       gl.depthMask(true)
       gl.depthFunc(gl.LEQUAL)
     }
+    if (bloom) this.applyBloom(bloom)
     gl.bindVertexArray(null)
   }
 }

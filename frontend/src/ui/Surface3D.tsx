@@ -21,6 +21,9 @@ interface Props {
   tauTicks?: number[]
   zRange?: [number, number]
   sway?: boolean
+  fx?: boolean
+  /** Wireframe target surface on the same grid as data (WebGL only). */
+  wire?: ArrayLike<number> | null
 }
 
 const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').matches
@@ -51,6 +54,7 @@ export function Surface3D(p: Props) {
       tauTicks: p.tauTicks,
       zRange: p.zRange,
       sway: p.sway,
+      fx: p.fx,
     }
     r.current = new SurfaceRenderer(canvas.current!, opts, { back: back.current!, gl: glc.current! })
     setMode(r.current.webgl ? 'webgl' : 'canvas')
@@ -63,6 +67,7 @@ export function Surface3D(p: Props) {
     if (p.data) r.current?.setSurface(p.data)
   }, [p.data])
   useEffect(() => r.current?.setPoints(p.points ?? []), [p.points])
+  useEffect(() => r.current?.setWire(p.wire ?? null), [p.wire])
   useEffect(() => r.current?.setAutoRotate(p.autoRotate ?? 0), [p.autoRotate, reduced])
 
   const tipLeft = hover ? Math.min(hover.px + 14, (canvas.current?.clientWidth ?? 0) - 150) : 0

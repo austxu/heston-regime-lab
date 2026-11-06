@@ -86,7 +86,10 @@ flowchart LR
   lighting, analytic grid lines, a projected IV contour map on the floor, depth-tested
   quotes with residual stems) layered between canvas-2D axes and labels; the original
   canvas-2D painter is the fallback when WebGL2 is unavailable or the context is lost.
-  Monte Carlo fans are shaded by the per-date density of all simulated paths.
+  Monte Carlo fans are shaded by the per-date density of all simulated paths. The attract
+  loop adds an effects mode: bloom (multisampled render, half-resolution blur, screen-blend
+  composite), a mirror reflection in the floor, bright grid lines with a light scan, rim
+  light, and the market's SVI surface as an ember wireframe the models converge onto.
 
 ### Browser lab views
 

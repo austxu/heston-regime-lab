@@ -4,7 +4,8 @@ import { useReducedMotion } from '../lib/hooks'
 import { REGIME_COLORS, type MarketData } from '../lib/market'
 import { MODEL_COLORS, MODEL_IDS, type SpxData } from '../lib/spx'
 import { MODELS, type ModelId } from '../math/models'
-import type { SurfaceData, SurfacePoint } from '../render/surface3d'
+import { sviW } from '../math/svi'
+import type { SurfaceData } from '../render/surface3d'
 import { Surface3D } from '../ui/Surface3D'
 import { request, send } from '../worker/client'
 import type { MarketFrame } from '../worker/protocol'
@@ -36,6 +37,29 @@ interface HistoryDay {
  *   w_T = theta + (v0 - theta) (1 - e^{-kappa T}) / (kappa T),
  * give two equations for that day's theta and v0 (its level and term structure).
  */
+/**
+ * The market's surface on the display grid, from the per-expiry SVI fits: total variance at
+ * fixed log-moneyness interpolated linearly in maturity between quoted expiries. It is drawn
+ * as the wireframe the models are fitted towards.
+ */
+function marketSurface(spx: SpxData, grid: { x: number[]; tau: number[] }): Float64Array {
+  const sl = spx.slices
+  const out = new Float64Array(grid.tau.length * grid.x.length)
+  grid.tau.forEach((tau, i) => {
+    let j = sl.findIndex((s) => s.tau >= tau)
+    if (j <= 0) j = 1
+    const a = sl[j - 1]
+    const b = sl[Math.min(j, sl.length - 1)]
+    const f = b.tau > a.tau ? Math.min(1, Math.max(0, (tau - a.tau) / (b.tau - a.tau))) : 0
+    grid.x.forEach((x, c) => {
+      const k = x * Math.sqrt(tau)
+      const w = (1 - f) * sviW(k, a.svi) + f * sviW(k, b.svi)
+      out[i * grid.x.length + c] = Math.sqrt(Math.max(w, 1e-8) / tau)
+    })
+  })
+  return out
+}
+
 function historyDays(m: MarketData, fit: Record<string, number>): HistoryDay[] {
   const { kappa, sigma, rho } = fit
   const f = (days: number) => {
@@ -176,21 +200,13 @@ export function Attract(props: { spx: SpxData | null; market: MarketData | null;
     if (daySurface) return { grid: setup.grid, iv: daySurface, flag: new Uint8Array(daySurface.length) }
     return frame ? { grid: setup.grid, iv: frame.surface, flag: frame.flag } : null
   }, [frame, setup, daySurface])
-  const points: SurfacePoint[] = useMemo(() => {
-    if (!setup || replay) return []
-    const out: SurfacePoint[] = []
-    let o = 0
-    for (const s of setup.slices) {
-      for (let i = 0; i < s.k.length; i++, o++) out.push({ x: setup.qx[o], tau: s.tau, iv: s.iv[i], model: frame ? frame.modelIv[o] : undefined })
-    }
-    return out
-  }, [setup, frame, replay])
+  const market3d = useMemo(() => (spx && setup ? marketSurface(spx, setup.grid) : null), [spx, setup])
 
   // A fixed IV axis per act, so a moving surface is seen moving rather than rescaled.
   const raceRange = useMemo((): [number, number] | undefined => {
     if (!setup || ready.length < MODEL_IDS.length) return undefined
-    return niceRange([...setup.slices.map((s) => s.iv), ...Object.values(runs.current).flatMap((fr) => (fr ?? []).map((f) => f.surface))])
-  }, [setup, ready.length])
+    return niceRange([...(market3d ? [market3d] : []), ...Object.values(runs.current).flatMap((fr) => (fr ?? []).map((f) => f.surface))])
+  }, [setup, ready.length, market3d])
   const historyRange = useMemo(() => (history ? niceRange(history.surfaces) : undefined), [history])
 
   // Scoreboard: finished models show their final RMSE, the active one its live RMSE.
@@ -222,7 +238,8 @@ export function Attract(props: { spx: SpxData | null; market: MarketData | null;
     <div class="attract">
       <Surface3D
         data={surface}
-        points={points}
+        wire={replay ? null : market3d}
+        fx
         xLabel="ln(K/F) / √T"
         xTick={xTickK}
         xTicks={xTicksK}
@@ -245,6 +262,7 @@ export function Attract(props: { spx: SpxData | null; market: MarketData | null;
         </p>
       </div>
       {replay && history!.clipped[dayIndex] ? <div class="attract-cap">off the scale: IV axis capped at {Math.round(history!.cap * 100)}%</div> : null}
+      {!replay && frame ? <div class="attract-legend">ember wireframe: market (252 quotes, SVI-smoothed) · surface: model</div> : null}
       {replay && market ? (
         <VixTimeline market={market} at={day!.i} />
       ) : (

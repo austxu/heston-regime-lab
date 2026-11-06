@@ -51,6 +51,8 @@ export interface RendererOptions {
   zRange?: [number, number]
   /** Auto-rotation swings around the default view instead of spinning (no edge-on views). */
   sway?: boolean
+  /** WebGL effects mode (bloom, reflection, light scan); animates continuously. */
+  fx?: boolean
 }
 
 /** Optional canvases stacked under the main one for the WebGL path. */
@@ -93,6 +95,7 @@ export class SurfaceRenderer {
   private vPitch = 0
   private autoSpeed = 0
   private swayT = 0
+  private wire: ArrayLike<number> | null = null
   private dragging = false
   private lastPointer: { x: number; y: number; t: number } | null = null
   private downAt: { x: number; y: number } | null = null
@@ -153,6 +156,12 @@ export class SurfaceRenderer {
     this.flag = d.flag
     if (!sameShape || instant || this.opts.reducedMotion) this.cur = Float64Array.from(d.iv)
     this.updateRange(instant || !sameShape)
+    this.requestFrame()
+  }
+
+  /** A wireframe target surface on the current grid (WebGL only), or null. */
+  setWire(iv: ArrayLike<number> | null) {
+    this.wire = iv
     this.requestFrame()
   }
 
@@ -313,6 +322,8 @@ export class SurfaceRenderer {
       } else this.yaw += (this.autoSpeed * dt) / 1000
       moving = true
     }
+    // The effects mode's light scan is time-based, so it keeps the frame loop running.
+    if (this.opts.fx && this.gl && !this.opts.reducedMotion) moving = true
     return moving
   }
 
@@ -572,6 +583,8 @@ export class SurfaceRenderer {
         { wx: g.x.map((_, j) => this.gx(j)), wy: wyRow, iv: this.cur, flag: this.flag },
         this.points.map((pt) => ({ wx: this.wx(pt.x), wy: this.wy(pt.tau), iv: pt.iv, model: pt.model })),
         zt.length > 1 ? (zt[1] - zt[0]) / 2 : 0.01,
+        this.opts.fx ? { time: performance.now() / 1000 } : null,
+        this.wire && this.grid && this.wire.length === this.cur.length ? this.wire : null,
       )
       this.drawFrame(false)
       this.drawHover()

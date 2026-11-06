@@ -1270,7 +1270,27 @@ math[display='block'] {
 .attract {
   position: fixed;
   inset: 0;
-  background: var(--panel);
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 46%, rgba(158, 119, 237, 0.16), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 50% 80%, rgba(240, 136, 123, 0.06), transparent 70%),
+    var(--panel);
+}
+.attract:has(.surface-wrap[data-renderer='canvas']) .attract-legend {
+  display: none;
+}
+.attract-legend {
+  position: absolute;
+  left: 16px;
+  bottom: 46px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+@media (max-width: 560px), (max-height: 340px) {
+  .attract-legend {
+    display: none;
+  }
 }
 .attract .surface-wrap,
 .attract .area-surface .surface-wrap {
