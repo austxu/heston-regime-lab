@@ -19,7 +19,7 @@ against it in tests, running in a Web Worker and drawn with WebGL2. There is no 
 surface. Dots are quotes, stems are the model's error, and the scipy optimum is drawn for
 comparison.
 
-[![Market tab: bid–ask smiles per expiry, fit error by expiry and the residual map](docs/images/market-residuals.webp)](https://heston.austxu.dev/#market)
+[![Market tab: double Heston parameters, bid–ask smiles per expiry, fit error by expiry and the residual map](docs/images/market-residuals.webp)](https://heston.austxu.dev/#market)
 
 Bid–ask smiles for all 12 expiries, fit error by expiry for every model, and a residual
 map in units of the half bid–ask spread.
