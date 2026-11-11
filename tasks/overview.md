@@ -60,7 +60,7 @@ scripts/bake_spx_options.py      Cboe chain -> derived IVs -> SVI + model fits -
 scripts/make_parity_fixtures.py  Python reference values for the vitest parity suite
 api/ratelimit.py          per-IP rate limiter (cache-backed) for /api/calibration/run
 api/logging_config.py     JSON log formatter + configure_logging()
-visualization/plots.py    diagnostic charts -> docs/assets/*.png (README figures)
+visualization/plots.py    diagnostic charts -> docs/assets/*.png (shown in docs/DEVELOPMENT.md)
 .github/workflows/        ci.yml (lint + tests + builds), deploy.yml (Railway, on green CI)
 railway.json + frontend/railway.json   Railway config-as-code; DEPLOY.md = full guide
 docker/                   Dockerfile.api, Dockerfile.frontend (nginx), nginx.conf
@@ -90,11 +90,13 @@ calibrate stream, paths, hmm) -> SVG charts / canvas surface. No network calls a
   `INPUT=chain.json` for a saved chain; ~3 min of fits) and `make fixtures` (with `.venv`
   python: `make PYTHON=.venv/bin/python bake`). Fixtures rewrite parity.json's timing field;
   revert it if nothing else changed.
+- Docs: README.md (results + architecture), docs/MATH.md (derivations), docs/DEVELOPMENT.md
+  (setup, layout, API, deploy). README screenshots live in docs/images/ (live site, 2x DPR, webp).
 - Deploy the lab: `npx wrangler pages deploy frontend/dist --project-name heston --branch main`
   (after `npm run build`; ask the user first).
 - Full stack: `docker compose up --build` (frontend :3000, api :8000, Redis :6379;
   synthetic by default, `HRL_OFFLINE=0` opts into live requests)
-- Regenerate README charts: `.venv/bin/python -m visualization.plots` -> docs/assets/
+- Regenerate the offline research charts (docs/DEVELOPMENT.md): `.venv/bin/python -m visualization.plots` -> docs/assets/
 - Deploy: GitHub Actions deploys the exact green commit once `RAILWAY_TOKEN` is configured;
   see DEPLOY.md. Keep native Railway autodeploy disabled when using the workflow.
 
